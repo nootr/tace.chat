@@ -6,6 +6,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use wisp_lib::dht_messages::{DhtMessage, NodeId};
 
+mod network_client;
+use network_client::{NetworkClient, RealNetworkClient};
+
 macro_rules! log_info {
     ($address:expr, $($arg:tt)*) => ({
         println!("[{}] {}", $address, format_args!($($arg)*));
@@ -27,15 +30,16 @@ pub struct NodeInfo {
 }
 
 #[derive(Debug)] // Keep Debug, remove Clone
-pub struct ChordNode {
+pub struct ChordNode<T: NetworkClient> {
     pub info: NodeInfo,
     pub successor: Arc<Mutex<NodeInfo>>,
     pub predecessor: Arc<Mutex<Option<NodeInfo>>>,
     pub finger_table: Arc<Mutex<Vec<NodeInfo>>>,
     pub data: Arc<Mutex<HashMap<NodeId, Vec<u8>>>>,
+    network_client: Arc<T>,
 }
 
-impl Clone for ChordNode {
+impl<T: NetworkClient> Clone for ChordNode<T> {
     fn clone(&self) -> Self {
         ChordNode {
             info: self.info.clone(),
@@ -43,12 +47,13 @@ impl Clone for ChordNode {
             predecessor: self.predecessor.clone(),
             finger_table: self.finger_table.clone(),
             data: self.data.clone(), // This clones the Arc, not the HashMap
+            network_client: self.network_client.clone(),
         }
     }
 }
 
-impl ChordNode {
-    pub async fn new(address: String) -> Self {
+impl<T: NetworkClient> ChordNode<T> {
+    pub async fn new(address: String, network_client: Arc<T>) -> Self {
         let id = Self::generate_node_id(&address);
         let info = NodeInfo {
             id,
@@ -66,6 +71,7 @@ impl ChordNode {
             predecessor,
             finger_table,
             data,
+            network_client,
         }
     }
 
@@ -196,23 +202,7 @@ impl ChordNode {
         value
     }
 
-    async fn call_node(
-        address: &str,
-        message: DhtMessage,
-    ) -> Result<DhtMessage, Box<dyn std::error::Error>> {
-        let mut stream = TcpStream::connect(address).await?;
-        let encoded = bincode::serialize(&message)?;
-        log_info!(address, "Sending message to {}: {:?}", address, message);
-
-        stream.write_all(&encoded).await?;
-
-        let mut buffer = Vec::new();
-        stream.read_to_end(&mut buffer).await?;
-        let response = bincode::deserialize(&buffer)?;
-        log_info!(address, "Received response from {}: {:?}", address, response);
-
-        Ok(response)
-    }
+    
 
     pub async fn join(&self, bootstrap_address: Option<String>) {
         match bootstrap_address {
@@ -220,7 +210,7 @@ impl ChordNode {
                 log_info!(self.info.address, "Attempting to join network via bootstrap node: {}", address);
                 // Find successor from bootstrap node
                 let response =
-                    Self::call_node(&address, DhtMessage::FindSuccessor { id: self.info.id }).await;
+                    self.network_client.call_node(&address, DhtMessage::FindSuccessor { id: self.info.id }).await;
                 match response {
                     Ok(DhtMessage::FoundSuccessor { id, address }) => {
                         let mut successor = self.successor.lock().unwrap();
@@ -268,7 +258,7 @@ impl ChordNode {
         }
 
         // Call n_prime's find_successor
-        match Self::call_node(&n_prime.address, DhtMessage::FindSuccessor { id }).await {
+        match self.network_client.call_node(&n_prime.address, DhtMessage::FindSuccessor { id }).await {
             Ok(DhtMessage::FoundSuccessor { id, address }) => NodeInfo { id, address },
             _ => {
                 log_error!(self.info.address, "Error: Failed to get successor from closest preceding node.");
@@ -289,7 +279,7 @@ impl ChordNode {
             if n_prime.id == self.info.id {
                 n_prime = self.closest_preceding_node(id).await;
             } else {
-                match Self::call_node(&n_prime.address, DhtMessage::ClosestPrecedingNode { id })
+                match self.network_client.call_node(&n_prime.address, DhtMessage::ClosestPrecedingNode { id })
                     .await
                 {
                     Ok(DhtMessage::FoundClosestPrecedingNode { id, address }) => {
@@ -301,7 +291,7 @@ impl ChordNode {
                 }
             }
             // Get the successor of the new n_prime
-            match Self::call_node(&n_prime.address, DhtMessage::GetSuccessor).await {
+            match self.network_client.call_node(&n_prime.address, DhtMessage::GetSuccessor).await {
                 Ok(DhtMessage::FoundSuccessor { id, address }) => {
                     current_successor = NodeInfo { id, address };
                 }
@@ -341,7 +331,7 @@ impl ChordNode {
         }
 
         // Get successor's predecessor
-        match Self::call_node(&successor.address, DhtMessage::GetPredecessor).await {
+        match self.network_client.call_node(&successor.address, DhtMessage::GetPredecessor).await {
             Ok(DhtMessage::Predecessor {
                 id: Some(x_id),
                 address: Some(x_address),
@@ -363,7 +353,7 @@ impl ChordNode {
         }
         // Notify successor that we are its predecessor
         let current_successor = self.successor.lock().unwrap().clone();
-        if let Err(e) = Self::call_node(
+        if let Err(e) = self.network_client.call_node(
             &current_successor.address,
             DhtMessage::Notify {
                 id: self.info.id,
@@ -392,7 +382,7 @@ impl ChordNode {
     }
 
     pub async fn fix_fingers(&self) {
-        
+
         // Just acquire and release lock to test if that's the issue
         {
             let _finger_table = self.finger_table.lock().unwrap();
@@ -402,14 +392,14 @@ impl ChordNode {
         let target_id = wisp_lib::add_id_power_of_2(&self.info.id, 0);
         let _successor = self.find_successor(target_id).await;
 
-        
+
     }
 
     pub async fn check_predecessor(&self) {
         let predecessor_option = self.predecessor.lock().unwrap().clone();
         if let Some(predecessor) = predecessor_option {
             // Send a simple message to check if predecessor is alive
-            match Self::call_node(&predecessor.address, DhtMessage::Ping).await {
+            match self.network_client.call_node(&predecessor.address, DhtMessage::Ping).await {
                 Ok(DhtMessage::Pong) => {
                     // Predecessor is alive
                 }
@@ -428,15 +418,15 @@ async fn main() {
     let address = env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
 
-    let node = Arc::new(ChordNode::new(address).await); // Wrap ChordNode in Arc
+    let node = Arc::new(ChordNode::new(address, Arc::new(RealNetworkClient)).await); // Wrap ChordNode in Arc
 
     node.join(bootstrap_address).await;
 
     let node_clone_for_tasks = node.clone();
-    
+
     tokio::spawn(async move {
         let node = node_clone_for_tasks;
-        
+
         loop {
             node.stabilize().await;
             node.fix_fingers().await;

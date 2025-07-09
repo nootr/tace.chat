@@ -123,4 +123,37 @@ mod tests {
         let updated_predecessor = node.predecessor.lock().unwrap();
         assert!(updated_predecessor.is_none());
     }
+
+    #[test]
+    async fn test_notify() {
+        let node_id = hex_to_node_id("0000000000000000000000000000000000000000");
+        let node_address = "127.0.0.1:9000".to_string();
+        let node = ChordNode::new(node_address.clone()).await;
+
+        // Case 1: Predecessor is nil
+        let n_prime_1 = NodeInfo {
+            id: hex_to_node_id("0000000000000000000000000000000000000001"),
+            address: "127.0.0.1:9001".to_string(),
+        };
+        node.notify(n_prime_1.clone()).await;
+        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_1.id);
+
+        // Case 2: n_prime is between current predecessor and self
+        let n_prime_2 = NodeInfo {
+            id: hex_to_node_id("0000000000000000000000000000000000000000"), // Same as node_id, should not update
+            address: "127.0.0.1:9002".to_string(),
+        };
+        node.notify(n_prime_2.clone()).await;
+        // Predecessor should still be n_prime_1 because n_prime_2 is not between n_prime_1 and node
+        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_1.id);
+
+        let n_prime_3 = NodeInfo {
+            id: hex_to_node_id("0000000000000000000000000000000000000000"), // This should be between n_prime_1 and node_id
+            address: "127.0.0.1:9003".to_string(),
+        };
+        // Manually set predecessor to something that n_prime_3 is between
+        *node.predecessor.lock().unwrap() = Some(hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").into());
+        node.notify(n_prime_3.clone()).await;
+        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_3.id);
+    }
 }
