@@ -1,10 +1,6 @@
 // Shared Rust library
 pub mod dht_messages;
 
-pub fn lib_test() -> &'static str {
-    "Hello from wisp_lib!"
-}
-
 // Checks if an ID is between two other IDs in a circular ID space.
 // `id` is between `start` and `end` if `start < id <= end` in the circular space.
 pub fn is_between(

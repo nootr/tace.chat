@@ -292,9 +292,6 @@ impl ChordNode {
 
 #[tokio::main]
 async fn main() {
-    println!("Hello from wisp_node!");
-    println!("{}", wisp_lib::lib_test());
-
     let address = env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
 

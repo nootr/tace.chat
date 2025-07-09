@@ -1,6 +1,6 @@
 #[wasm_bindgen]
 pub fn webclient_test() -> String {
-    format!("Hello from wisp_webclient! Also: {}", wisp_lib::lib_test())
+    "Hello from wisp_webclient!".to_string()
 }
 
 use wasm_bindgen::prelude::*;
