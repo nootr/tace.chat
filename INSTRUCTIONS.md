@@ -46,7 +46,7 @@ project-root/
 ### 1. **Setup Project Structure**
 
 * [x] Initialize Cargo workspace with `lib`, `node`, and `webclient`
-* [ ] Setup shared crate in `lib/` for:
+* [x] Setup shared crate in lib/ for:
   * Message struct definitions
   * Cryptography helpers (encryption, signing)
   * DHT protocol messages
@@ -54,11 +54,11 @@ project-root/
 
 ### 2. **Minimal Chord DHT Node**
 
-* [ ] Implement barebones Chord DHT node:
+* [x] Implement barebones Chord DHT node:
 
   * Join network via bootstrap node (env variable)
   * Start new network if no bootstrap provided
-* [ ] Minimal network operations (store/retrieve keys)
+* [x] Minimal network operations (store/retrieve keys)
 
 ### 3. **Local Test Harness**
 
