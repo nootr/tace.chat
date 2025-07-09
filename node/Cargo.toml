@@ -1,0 +1,11 @@
+[package]
+name = "wisp_node"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wisp_lib = { path = "../lib" }
+
+[[bin]]
+name = "wisp_node"
+path = "src/main.rs"

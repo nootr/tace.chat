@@ -1,0 +1,15 @@
+[package]
+name = "wisp_webclient"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+wisp_lib = { path = "../lib" }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["console"] }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

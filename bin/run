@@ -1,0 +1,12 @@
+#!/bin/bash
+
+set -e
+
+echo "Compiling webclient..."
+wasm-pack build webclient
+
+echo "Copying WASM files to public/..."
+cp webclient/pkg/* public/
+
+echo "Starting web server at http://localhost:8000"
+python3 -m http.server --directory public

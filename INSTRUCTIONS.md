@@ -45,13 +45,12 @@ project-root/
 
 ### 1. **Setup Project Structure**
 
-* [ ] Initialize Cargo workspace with `lib`, `node`, and `webclient`
+* [x] Initialize Cargo workspace with `lib`, `node`, and `webclient`
 * [ ] Setup shared crate in `lib/` for:
-
   * Message struct definitions
   * Cryptography helpers (encryption, signing)
   * DHT protocol messages
-* [ ] Setup `node/` crate as a binary
+* [x] Setup node/ crate as a binary
 
 ### 2. **Minimal Chord DHT Node**
 
@@ -83,8 +82,8 @@ project-root/
 
 ### 6. **WebClient (SPA) Setup**
 
-* [ ] Rust + WASM + Tailwind or minimal UI
-* [ ] Use `wasm-bindgen` and `web-sys` for DOM bindings
+* [x] Rust + WASM + Tailwind or minimal UI
+* [x] Use `wasm-bindgen` and `web-sys` for DOM bindings
 * [ ] Integrate shared `lib/` for encryption/decryption
 * [ ] Compile to `pkg/` and serve via `bin/run`
 
