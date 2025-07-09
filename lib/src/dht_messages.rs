@@ -5,6 +5,10 @@ pub type NodeId = [u8; 20]; // 160-bit ID for Chord
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum DhtMessage {
+    // Error message
+    Error {
+        message: String,
+    },
     // Message to find the successor of a given ID
     FindSuccessor {
         id: NodeId,

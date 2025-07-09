@@ -6,6 +6,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use wisp_lib::dht_messages::{DhtMessage, NodeId};
 
+macro_rules! log_info {
+    ($address:expr, $($arg:tt)*) => ({
+        println!("[{}] {}", $address, format_args!($($arg)*));
+    })
+}
+
+macro_rules! log_error {
+    ($address:expr, $($arg:tt)*) => ({
+        eprintln!("[{}] {}", $address, format_args!($($arg)*));
+    })
+}
+
 const M: usize = 160; // Number of bits in Chord ID space (SHA-1 produces 160-bit hash)
 
 #[derive(Debug, Clone)]
@@ -64,20 +76,27 @@ impl ChordNode {
     }
 
     pub async fn start(&self) {
-        println!(
+        log_info!(
+            self.info.address,
             "Chord Node {} starting at {}",
             hex::encode(self.info.id),
             self.info.address
         );
-        let listener = TcpListener::bind(&self.info.address).await.unwrap();
+        let listener = TcpListener::bind(&self.info.address).await.expect("Failed to bind to address");
 
         let node_clone = self.clone(); // Clone the Arc for each connection
         loop {
-            let (socket, _) = listener.accept().await.unwrap();
-            let node = node_clone.clone();
-            tokio::spawn(async move {
-                node.handle_connection(socket).await;
-            });
+            match listener.accept().await {
+                Ok((socket, _)) => {
+                    let node = node_clone.clone();
+                    tokio::spawn(async move {
+                        node.handle_connection(socket).await;
+                    });
+                }
+                Err(e) => {
+                    log_error!(self.info.address, "Failed to accept connection: {}", e);
+                }
+            }
         }
     }
 
@@ -85,13 +104,14 @@ impl ChordNode {
         let mut buffer = Vec::new();
         // Read the entire message
         if let Err(e) = socket.read_to_end(&mut buffer).await {
-            eprintln!("Failed to read from socket: {}", e);
+            log_error!(self.info.address, "Failed to read from socket: {}", e);
             return;
         }
 
         match bincode::deserialize::<DhtMessage>(&buffer) {
             Ok(message) => {
-                println!("Received message: {:?}\n", message);
+                log_info!(self.info.address, "Received message: {:?} " , message);
+
                 let response = match message {
                     DhtMessage::FindSuccessor { id } => {
                         let successor = self.find_successor(id).await;
@@ -116,7 +136,7 @@ impl ChordNode {
                     }
                     DhtMessage::Store { key, value } => {
                         self.store(key, value).await;
-                        return;
+                        DhtMessage::Pong // Send a Pong response
                     }
                     DhtMessage::Retrieve { key } => {
                         let value = self.retrieve(key).await;
@@ -131,21 +151,26 @@ impl ChordNode {
                     }
                     DhtMessage::Notify { id, address } => {
                         self.notify(NodeInfo { id, address }).await;
-                        return;
+                        DhtMessage::Pong // Send a Pong response
                     }
                     DhtMessage::Ping => DhtMessage::Pong,
                     _ => {
-                        eprintln!("Unsupported message received: {:?}", message);
-                        return;
+                        log_error!(self.info.address, "Unsupported message received: {:?}", message);
+                        DhtMessage::Error {
+                            message: "Unsupported message type".to_string(),
+                        }
                     }
                 };
                 let encoded_response = bincode::serialize(&response).unwrap();
+                log_info!(self.info.address, "Sending response to {}: {:?}", socket.peer_addr().unwrap(), response);
                 if let Err(e) = socket.write_all(&encoded_response).await {
-                    eprintln!("Failed to write response to socket: {}", e);
+                    log_error!(self.info.address, "Failed to write response to socket: {}", e);
+
                 }
             }
             Err(e) => {
-                eprintln!("Failed to deserialize message: {}", e);
+                log_error!(self.info.address, "Failed to deserialize message: {}", e);
+
             }
         }
     }
@@ -154,7 +179,8 @@ impl ChordNode {
     pub async fn store(&self, key: NodeId, value: Vec<u8>) {
         let mut data = self.data.lock().unwrap();
         data.insert(key, value);
-        println!("Stored key: {}", hex::encode(key));
+        log_info!(self.info.address, "Stored key: {}", hex::encode(key));
+
     }
 
     // Retrieves a value by key from the DHT
@@ -162,9 +188,10 @@ impl ChordNode {
         let data = self.data.lock().unwrap();
         let value = data.get(&key).cloned();
         if value.is_some() {
-            println!("Retrieved key: {}", hex::encode(key));
+            log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
+
         } else {
-            println!("Key not found: {}", hex::encode(key));
+            log_info!(self.info.address, "Key not found: {}", hex::encode(key));
         }
         value
     }
@@ -175,19 +202,22 @@ impl ChordNode {
     ) -> Result<DhtMessage, Box<dyn std::error::Error>> {
         let mut stream = TcpStream::connect(address).await?;
         let encoded = bincode::serialize(&message)?;
+        log_info!(address, "Sending message to {}: {:?}", address, message);
+
         stream.write_all(&encoded).await?;
-        stream.shutdown().await?;
 
         let mut buffer = Vec::new();
         stream.read_to_end(&mut buffer).await?;
         let response = bincode::deserialize(&buffer)?;
+        log_info!(address, "Received response from {}: {:?}", address, response);
+
         Ok(response)
     }
 
     pub async fn join(&self, bootstrap_address: Option<String>) {
         match bootstrap_address {
             Some(address) => {
-                println!("Attempting to join network via bootstrap node: {}", address);
+                log_info!(self.info.address, "Attempting to join network via bootstrap node: {}", address);
                 // Find successor from bootstrap node
                 let response =
                     Self::call_node(&address, DhtMessage::FindSuccessor { id: self.info.id }).await;
@@ -195,21 +225,20 @@ impl ChordNode {
                     Ok(DhtMessage::FoundSuccessor { id, address }) => {
                         let mut successor = self.successor.lock().unwrap();
                         *successor = NodeInfo { id, address };
-                        println!(
+                        log_info!(
+                            self.info.address,
                             "Joined network. Successor: {} at {}",
                             hex::encode(successor.id),
                             successor.address
                         );
                     }
                     _ => {
-                        eprintln!("Failed to get successor from bootstrap node.");
-                        // Fallback to starting new network if join fails
-                        self.start_new_network().await;
+                        log_error!(self.info.address, "Failed to get successor from bootstrap node.");
                     }
                 }
             }
             None => {
-                println!("No bootstrap node provided. Starting a new network.");
+                log_info!(self.info.address, "No bootstrap node provided. Starting a new network.");
                 self.start_new_network().await;
             }
         }
@@ -220,7 +249,8 @@ impl ChordNode {
         *successor = self.info.clone();
         let mut predecessor = self.predecessor.lock().unwrap();
         *predecessor = None;
-        println!("Started new network. I am the only node.");
+        log_info!(self.info.address, "Started new network. I am the only node.");
+
     }
 
     // Finds the successor of an ID
@@ -241,7 +271,8 @@ impl ChordNode {
         match Self::call_node(&n_prime.address, DhtMessage::FindSuccessor { id }).await {
             Ok(DhtMessage::FoundSuccessor { id, address }) => NodeInfo { id, address },
             _ => {
-                eprintln!("Error: Failed to get successor from closest preceding node.");
+                log_error!(self.info.address, "Error: Failed to get successor from closest preceding node.");
+
                 // Fallback to self's successor if remote call fails
                 self.successor.lock().unwrap().clone()
             }
@@ -265,9 +296,7 @@ impl ChordNode {
                         n_prime = NodeInfo { id, address };
                     }
                     _ => {
-                        eprintln!("Error: Failed to get closest preceding node from remote.");
-                        // Fallback to self if remote call fails
-                        return self.info.clone();
+                        log_error!(self.info.address, "Error: Failed to get closest preceding node from remote.");
                     }
                 }
             }
@@ -277,9 +306,7 @@ impl ChordNode {
                     current_successor = NodeInfo { id, address };
                 }
                 _ => {
-                    eprintln!("Error: Failed to get successor of n_prime.");
-                    // Fallback to self's successor if remote call fails
-                    current_successor = self.successor.lock().unwrap().clone();
+                    log_error!(self.info.address, "Error: Failed to get successor of n_prime.");
                 }
             }
         }
@@ -302,6 +329,17 @@ impl ChordNode {
 
     pub async fn stabilize(&self) {
         let successor = self.successor.lock().unwrap().clone();
+
+        // If this node is its own successor, it's the only node in the network.
+        // In this case, its predecessor should be None.
+        if self.info.id == successor.id {
+            let mut predecessor = self.predecessor.lock().unwrap();
+            if predecessor.is_some() {
+                *predecessor = None;
+            }
+            return;
+        }
+
         // Get successor's predecessor
         match Self::call_node(&successor.address, DhtMessage::GetPredecessor).await {
             Ok(DhtMessage::Predecessor {
@@ -319,7 +357,8 @@ impl ChordNode {
                 }
             }
             _ => {
-                eprintln!("Error: Failed to get predecessor from successor.");
+                log_error!(self.info.address, "Error: Failed to get predecessor from successor.");
+
             }
         }
         // Notify successor that we are its predecessor
@@ -333,7 +372,8 @@ impl ChordNode {
         )
         .await
         {
-            eprintln!("Error notifying successor: {}", e);
+            log_error!(self.info.address, "Error notifying successor: {}", e);
+
         }
     }
 
@@ -352,6 +392,7 @@ impl ChordNode {
     }
 
     pub async fn fix_fingers(&self) {
+        
         // Just acquire and release lock to test if that's the issue
         {
             let _finger_table = self.finger_table.lock().unwrap();
@@ -361,7 +402,7 @@ impl ChordNode {
         let target_id = wisp_lib::add_id_power_of_2(&self.info.id, 0);
         let _successor = self.find_successor(target_id).await;
 
-        println!("Fingers fixed.");
+        
     }
 
     pub async fn check_predecessor(&self) {
@@ -376,14 +417,9 @@ impl ChordNode {
                     // Predecessor is dead, clear it
                     let mut p = self.predecessor.lock().unwrap();
                     *p = None;
-                    println!(
-                        "Predecessor {} is dead. Cleared.",
-                        hex::encode(predecessor.id)
-                    );
                 }
             }
         }
-        println!("Checking predecessor...");
     }
 }
 
@@ -397,13 +433,15 @@ async fn main() {
     node.join(bootstrap_address).await;
 
     let node_clone_for_tasks = node.clone();
+    
     tokio::spawn(async move {
         let node = node_clone_for_tasks;
+        
         loop {
             node.stabilize().await;
             node.fix_fingers().await;
             node.check_predecessor().await;
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await; // Stabilize every 5 seconds
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
         }
     });
 
