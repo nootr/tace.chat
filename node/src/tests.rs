@@ -104,4 +104,23 @@ mod tests {
         let retrieved_none = node.retrieve(non_existent_key).await;
         assert_eq!(retrieved_none, None);
     }
+
+    #[test]
+    async fn test_check_predecessor_dead() {
+        let node = ChordNode::new("127.0.0.1:9000".to_string()).await;
+        let dead_predecessor_id = hex_to_node_id("1111111111111111111111111111111111111111");
+        let dead_predecessor_address = "127.0.0.1:9999".to_string(); // Non-existent address
+
+        let mut predecessor = node.predecessor.lock().unwrap();
+        *predecessor = Some(NodeInfo {
+            id: dead_predecessor_id,
+            address: dead_predecessor_address,
+        });
+        drop(predecessor); // Release lock
+
+        node.check_predecessor().await;
+
+        let updated_predecessor = node.predecessor.lock().unwrap();
+        assert!(updated_predecessor.is_none());
+    }
 }

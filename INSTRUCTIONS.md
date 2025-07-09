@@ -62,7 +62,7 @@ project-root/
 
 ### 3. **Local Test Harness**
 
-* [ ] Add a script to spin up N local nodes (e.g., `scripts/spawn_nodes.rs`)
+* [x] Add a script to spin up N local nodes (e.g., `bin/run`)
 * [ ] Use local ports and logs for testing
 * [ ] Ensure nodes discover each other and stabilize the ring
 

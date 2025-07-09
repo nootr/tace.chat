@@ -63,7 +63,7 @@ impl ChordNode {
         hasher.finalize().into()
     }
 
-    pub async fn start(self) {
+    pub async fn start(&self) {
         println!(
             "Chord Node {} starting at {}",
             hex::encode(self.info.id),
@@ -71,9 +71,10 @@ impl ChordNode {
         );
         let listener = TcpListener::bind(&self.info.address).await.unwrap();
 
+        let node_clone = self.clone(); // Clone the Arc for each connection
         loop {
             let (socket, _) = listener.accept().await.unwrap();
-            let node = self.clone();
+            let node = node_clone.clone();
             tokio::spawn(async move {
                 node.handle_connection(socket).await;
             });
@@ -115,15 +116,25 @@ impl ChordNode {
                     }
                     DhtMessage::Store { key, value } => {
                         self.store(key, value).await;
-                        // No response for store for now, or a simple ACK
                         return;
                     }
                     DhtMessage::Retrieve { key } => {
                         let value = self.retrieve(key).await;
                         DhtMessage::Retrieved { key, value }
                     }
+                    DhtMessage::GetPredecessor => {
+                        let predecessor = self.predecessor.lock().unwrap().clone();
+                        DhtMessage::Predecessor {
+                            id: predecessor.as_ref().map(|p| p.id),
+                            address: predecessor.as_ref().map(|p| p.address.clone()),
+                        }
+                    }
+                    DhtMessage::Notify { id, address } => {
+                        self.notify(NodeInfo { id, address }).await;
+                        return;
+                    }
+                    DhtMessage::Ping => DhtMessage::Pong,
                     _ => {
-                        // Handle other messages or return an error/unsupported message
                         eprintln!("Unsupported message received: {:?}", message);
                         return;
                     }
@@ -186,7 +197,7 @@ impl ChordNode {
                         *successor = NodeInfo { id, address };
                         println!(
                             "Joined network. Successor: {} at {}",
-                            hex::encode(&successor.id),
+                            hex::encode(successor.id),
                             successor.address
                         );
                     }
@@ -288,6 +299,92 @@ impl ChordNode {
         }
         self.info.clone()
     }
+
+    pub async fn stabilize(&self) {
+        let successor = self.successor.lock().unwrap().clone();
+        // Get successor's predecessor
+        match Self::call_node(&successor.address, DhtMessage::GetPredecessor).await {
+            Ok(DhtMessage::Predecessor {
+                id: Some(x_id),
+                address: Some(x_address),
+            }) => {
+                let x = NodeInfo {
+                    id: x_id,
+                    address: x_address,
+                };
+                // If x is between self and successor, then x is the new successor
+                if wisp_lib::is_between(&x.id, &self.info.id, &successor.id) {
+                    let mut current_successor = self.successor.lock().unwrap();
+                    *current_successor = x.clone();
+                }
+            }
+            _ => {
+                eprintln!("Error: Failed to get predecessor from successor.");
+            }
+        }
+        // Notify successor that we are its predecessor
+        let current_successor = self.successor.lock().unwrap().clone();
+        if let Err(e) = Self::call_node(
+            &current_successor.address,
+            DhtMessage::Notify {
+                id: self.info.id,
+                address: self.info.address.clone(),
+            },
+        )
+        .await
+        {
+            eprintln!("Error notifying successor: {}", e);
+        }
+    }
+
+    pub async fn notify(&self, n_prime: NodeInfo) {
+        let mut predecessor = self.predecessor.lock().unwrap();
+        // If predecessor is nil or n_prime is between predecessor and self
+        if predecessor.is_none()
+            || wisp_lib::is_between(
+                &n_prime.id,
+                &predecessor.as_ref().unwrap().id,
+                &self.info.id,
+            )
+        {
+            *predecessor = Some(n_prime);
+        }
+    }
+
+    pub async fn fix_fingers(&self) {
+        // Just acquire and release lock to test if that's the issue
+        {
+            let _finger_table = self.finger_table.lock().unwrap();
+        } // Lock released
+
+        // Now call find_successor
+        let target_id = wisp_lib::add_id_power_of_2(&self.info.id, 0);
+        let _successor = self.find_successor(target_id).await;
+
+        println!("Fingers fixed.");
+    }
+
+    pub async fn check_predecessor(&self) {
+        let predecessor_option = self.predecessor.lock().unwrap().clone();
+        if let Some(predecessor) = predecessor_option {
+            // Send a simple message to check if predecessor is alive
+            match Self::call_node(&predecessor.address, DhtMessage::Ping).await {
+                Ok(DhtMessage::Pong) => {
+                    // Predecessor is alive
+                }
+                _ => {
+                    // Predecessor is dead, clear it
+                    let mut p = self.predecessor.lock().unwrap();
+                    *p = None;
+                    println!(
+                        "Predecessor {} is dead. Cleared.",
+                        hex::encode(predecessor.id)
+                    );
+                }
+            }
+        }
+        println!("Checking predecessor...");
+    }
 }
 
 #[tokio::main]
@@ -295,8 +392,21 @@ async fn main() {
     let address = env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
 
-    let node = ChordNode::new(address).await;
+    let node = Arc::new(ChordNode::new(address).await); // Wrap ChordNode in Arc
+
     node.join(bootstrap_address).await;
+
+    let node_clone_for_tasks = node.clone();
+    tokio::spawn(async move {
+        let node = node_clone_for_tasks;
+        loop {
+            node.stabilize().await;
+            node.fix_fingers().await;
+            node.check_predecessor().await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await; // Stabilize every 5 seconds
+        }
+    });
+
     node.start().await;
 }
 

@@ -51,4 +51,6 @@ pub enum DhtMessage {
     },
     // Request for a node's successor
     GetSuccessor,
+    Ping,
+    Pong,
 }

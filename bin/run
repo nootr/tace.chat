@@ -2,11 +2,94 @@
 
 set -e
 
+NUM_NODES=1 # Default to 1 node
+
+# Function to display usage
+usage() {
+  echo "Usage: $0 [-n <num_nodes>] [-h] [--clean]"
+  echo "  -n <num_nodes>  Number of Chord nodes to spin up (default: 1)"
+  echo "  -h              Display this help message"
+  echo "  --clean         Remove any running wisp_node and web server processes"
+  exit 0
+}
+
+CLEAN_MODE=false # Initialize clean mode flag
+
+# Parse arguments
+while (( "$#" )); do
+  case "$1" in
+    -n)
+      NUM_NODES="$2"
+      shift 2
+      ;;
+    -h)
+      usage
+      ;;
+    --clean)
+      CLEAN_MODE=true
+      shift
+      ;;
+    -*)
+      echo "Invalid option: $1" >&2
+      exit 1
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ "$CLEAN_MODE" = true ]; then
+  echo "Removing any running wisp_node processes..."
+  pkill -f "target/debug/wisp_node" || true # Use || true to prevent script from exiting if no processes are found
+  pkill -f "python3 -m http.server" || true # Kill web server processes
+  echo "Cleanup complete."
+  exit 0
+fi
+
+
+
 echo "Compiling webclient..."
 wasm-pack build webclient
 
 echo "Copying WASM files to public/..."
-cp webclient/pkg/* public/
+cp webclient/pkg/wisp_webclient.js public/
+cp webclient/pkg/wisp_webclient_bg.wasm public/
 
 echo "Starting web server at http://localhost:8000"
-python3 -m http.server --directory public
+# Start web server in background
+python3 -m http.server --directory public & 
+WEB_SERVER_PID=$!
+
+# Build wisp_node once
+echo "Building wisp_node..."
+cargo build --package wisp_node
+
+# Start bootstrap node
+BOOTSTRAP_PORT=8008
+echo "Starting bootstrap node on port $BOOTSTRAP_PORT"
+NODE_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" target/debug/wisp_node & # Run binary directly
+BOOTSTRAP_NODE_PID=$!
+sleep 2 # Give bootstrap node time to start
+
+# Start additional nodes
+for (( i=1; i<NUM_NODES; i++ ))
+do
+    NODE_PORT=$((8008 + i))
+    echo "Starting node on port $NODE_PORT, joining via 127.0.0.1:$BOOTSTRAP_PORT"
+    NODE_ADDRESS="127.0.0.1:$NODE_PORT" BOOTSTRAP_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" target/debug/wisp_node &
+    sleep 1 # Short delay between joining nodes
+done
+
+echo "All nodes and web server started. Press [ENTER] to stop them."
+read -r
+
+echo "Stopping nodes and web server..."
+kill $WEB_SERVER_PID || true
+kill $BOOTSTRAP_NODE_PID || true
+# Kill all wisp_node processes
+pkill -f "target/debug/wisp_node" || true
+pkill -f "python3 -m http.server" || true
+
+echo "Cleanup complete."

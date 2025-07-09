@@ -1,2 +1,4 @@
 target/
-pkg/
+webclient/pkg/
+public/wisp_webclient.js
+public/wisp_webclient_bg.wasm
