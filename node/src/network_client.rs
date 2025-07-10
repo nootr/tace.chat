@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use tace_lib::dht_messages::DhtMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use wisp_lib::dht_messages::DhtMessage;
 
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]

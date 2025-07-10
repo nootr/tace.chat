@@ -1,10 +1,10 @@
 [package]
-name = "wisp_node"
+name = "tace_node"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wisp_lib = { path = "../lib" }
+tace_lib = { path = "../lib" }
 tokio = { version = "1", features = ["full"] }
 sha1 = "0.10"
 serde = { version = "1.0", features = ["derive"] }

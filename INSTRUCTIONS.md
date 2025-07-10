@@ -1,4 +1,4 @@
-# Wisp: WhatsApp-Web-like P2P Messaging App (WASM + Rust + Chord DHT)
+# tace.chat: WhatsApp-Web-like P2P Messaging App (WASM + Rust + Chord DHT)
 
 A lightweight, privacy-focused messaging application inspired by WhatsApp Web.
 

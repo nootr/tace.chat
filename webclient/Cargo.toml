@@ -1,10 +1,10 @@
 [package]
-name = "wisp_webclient"
+name = "tace_webclient"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-wisp_lib = { path = "../lib" }
+tace_lib = { path = "../lib" }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["console"] }
 

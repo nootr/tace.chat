@@ -1,5 +1,5 @@
 target/
 webclient/pkg/
-public/wisp_webclient.js
-public/wisp_webclient_bg.wasm
+public/tace_webclient.js
+public/tace_webclient_bg.wasm
 .env

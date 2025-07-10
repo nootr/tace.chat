@@ -13,7 +13,7 @@ cleanup() {
   for pid in "${BACKGROUND_PIDS[@]}"; do
     kill "$pid" || true
   done
-  pkill -f "target/debug/wisp_node" || true # Fallback for any missed wisp_node processes
+  pkill -f "target/debug/tace_node" || true # Fallback for any missed tace_node processes
   sleep 1 # Give OS time to release ports
   echo "Cleanup complete."
 }
@@ -26,7 +26,7 @@ usage() {
   echo "Usage: $0 [-n <num_nodes>] [-h] [--clean]"
   echo "  -n <num_nodes>  Number of Chord nodes to spin up (default: 1)"
   echo "  -h              Display this help message"
-  echo "  --clean         Remove any running wisp_node processes"
+  echo "  --clean         Remove any running tace_node processes"
   exit 0
 }
 
@@ -58,8 +58,8 @@ while (( "$#" )); do
 done
 
 if [ "$CLEAN_MODE" = true ]; then
-  echo "Removing any running wisp_node processes..."
-  pkill -f "target/debug/wisp_node" || true # Use || true to prevent script from exiting if no processes are found
+  echo "Removing any running tace_node processes..."
+  pkill -f "target/debug/tace_node" || true # Use || true to prevent script from exiting if no processes are found
   pkill -f "python3 -m http.server" || true # Kill web server processes
   echo "Cleanup complete."
   exit 0
@@ -74,8 +74,8 @@ echo "Compiling webclient..."
 wasm-pack build webclient
 
 echo "Copying WASM files to public/..."
-cp webclient/pkg/wisp_webclient.js public/
-cp webclient/pkg/wisp_webclient_bg.wasm public/
+cp webclient/pkg/tace_webclient.js public/
+cp webclient/pkg/tace_webclient_bg.wasm public/
 
 echo "Starting web server in public/ directory..."
 (cd public && python3 -m http.server 8000) &
@@ -84,14 +84,14 @@ BACKGROUND_PIDS+=($WEB_SERVER_PID)
 
 
 
-# Build wisp_node once
-echo "Building wisp_node..."
-cargo build --package wisp_node
+# Build tace_node once
+echo "Building tace_node..."
+cargo build --package tace_node
 
 # Start bootstrap node
 BOOTSTRAP_PORT=8008
 echo "Starting bootstrap node on port $BOOTSTRAP_PORT"
-NODE_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/wisp_node & # Run binary directly
+NODE_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node & # Run binary directly
 BOOTSTRAP_NODE_PID=$!
 BACKGROUND_PIDS+=($BOOTSTRAP_NODE_PID)
 sleep 5 # Give bootstrap node more time to start
@@ -101,7 +101,7 @@ for (( i=1; i<NUM_NODES; i++ ))
 do
     NODE_PORT=$((8008 + i))
     echo "Starting node on port $NODE_PORT, joining via 127.0.0.1:$BOOTSTRAP_PORT"
-    NODE_ADDRESS="127.0.0.1:$NODE_PORT" BOOTSTRAP_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/wisp_node &
+    NODE_ADDRESS="127.0.0.1:$NODE_PORT" BOOTSTRAP_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node &
     NODE_PID=$!
     BACKGROUND_PIDS+=($NODE_PID)
     sleep 1 # Short delay between joining nodes

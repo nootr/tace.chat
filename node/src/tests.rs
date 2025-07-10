@@ -4,7 +4,7 @@ mod tests {
     use crate::{ChordNode, NodeInfo, M};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use wisp_lib::dht_messages::{DhtMessage, NodeId};
+    use tace_lib::dht_messages::{DhtMessage, NodeId};
 
     fn hex_to_node_id(hex_str: &str) -> NodeId {
         let mut id = [0u8; 20];

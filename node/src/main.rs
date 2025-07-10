@@ -2,9 +2,9 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex};
+use tace_lib::dht_messages::{DhtMessage, NodeId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use wisp_lib::dht_messages::{DhtMessage, NodeId};
 
 mod network_client;
 use network_client::{NetworkClient, RealNetworkClient};
@@ -293,7 +293,7 @@ impl<T: NetworkClient> ChordNode<T> {
     pub async fn find_successor(&self, id: NodeId) -> NodeInfo {
         // If the ID is between this node and its successor, then successor is the answer
         let successor = self.successor.lock().unwrap().clone();
-        if wisp_lib::is_between(&id, &self.info.id, &successor.id) {
+        if tace_lib::is_between(&id, &self.info.id, &successor.id) {
             return successor;
         }
 
@@ -328,7 +328,7 @@ impl<T: NetworkClient> ChordNode<T> {
         let mut current_successor = self.successor.lock().unwrap().clone();
 
         // Loop until id is between n_prime and its successor
-        while !wisp_lib::is_between(&id, &n_prime.id, &current_successor.id) {
+        while !tace_lib::is_between(&id, &n_prime.id, &current_successor.id) {
             if n_prime.id == self.info.id {
                 n_prime = self.closest_preceding_node(id).await;
             } else {
@@ -375,7 +375,7 @@ impl<T: NetworkClient> ChordNode<T> {
         for i in (0..M).rev() {
             let finger = &finger_table[i];
             // If finger is between current node and id (exclusive of current node, exclusive of id)
-            if wisp_lib::is_between(&finger.id, &self.info.id, &id) {
+            if tace_lib::is_between(&finger.id, &self.info.id, &id) {
                 return finger.clone();
             }
         }
@@ -410,7 +410,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     address: x_address,
                 };
                 // If x is between self and successor, then x is the new successor
-                if wisp_lib::is_between(&x.id, &self.info.id, &successor.id) {
+                if tace_lib::is_between(&x.id, &self.info.id, &successor.id) {
                     let mut current_successor = self.successor.lock().unwrap();
                     *current_successor = x.clone();
                 }
@@ -443,7 +443,7 @@ impl<T: NetworkClient> ChordNode<T> {
         let mut predecessor = self.predecessor.lock().unwrap();
         // If predecessor is nil or n_prime is between predecessor and self
         if predecessor.is_none()
-            || wisp_lib::is_between(
+            || tace_lib::is_between(
                 &n_prime.id,
                 &predecessor.as_ref().unwrap().id,
                 &self.info.id,
@@ -460,7 +460,7 @@ impl<T: NetworkClient> ChordNode<T> {
         } // Lock released
 
         // Now call find_successor
-        let target_id = wisp_lib::add_id_power_of_2(&self.info.id, 0);
+        let target_id = tace_lib::add_id_power_of_2(&self.info.id, 0);
         let _successor = self.find_successor(target_id).await;
     }
 
