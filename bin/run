@@ -91,7 +91,7 @@ cargo build --package tace_node
 # Start bootstrap node
 BOOTSTRAP_PORT=8008
 echo "Starting bootstrap node on port $BOOTSTRAP_PORT"
-NODE_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node & # Run binary directly
+API_PORT="3000" NODE_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node & # Run binary directly
 BOOTSTRAP_NODE_PID=$!
 BACKGROUND_PIDS+=($BOOTSTRAP_NODE_PID)
 sleep 5 # Give bootstrap node more time to start
@@ -100,8 +100,9 @@ sleep 5 # Give bootstrap node more time to start
 for (( i=1; i<NUM_NODES; i++ ))
 do
     NODE_PORT=$((8008 + i))
+    API_PORT=$((3000 + i))
     echo "Starting node on port $NODE_PORT, joining via 127.0.0.1:$BOOTSTRAP_PORT"
-    NODE_ADDRESS="127.0.0.1:$NODE_PORT" BOOTSTRAP_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node &
+    API_PORT="$API_PORT" NODE_ADDRESS="127.0.0.1:$NODE_PORT" BOOTSTRAP_ADDRESS="127.0.0.1:$BOOTSTRAP_PORT" RUST_BACKTRACE=1 target/debug/tace_node &
     NODE_PID=$!
     BACKGROUND_PIDS+=($NODE_PID)
     sleep 1 # Short delay between joining nodes

@@ -6,7 +6,10 @@ use tace_lib::dht_messages::{DhtMessage, NodeId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+mod api;
 mod network_client;
+
+use api::run;
 use network_client::{NetworkClient, RealNetworkClient};
 
 macro_rules! log_info {
@@ -490,8 +493,16 @@ impl<T: NetworkClient> ChordNode<T> {
 async fn main() {
     let address = env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
     let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
+    let api_port = env::var("API_PORT")
+        .unwrap_or_else(|_| "3000".to_string())
+        .parse()
+        .expect("API_PORT must be a valid integer");
 
-    let node = Arc::new(ChordNode::new(address, Arc::new(RealNetworkClient)).await); // Wrap ChordNode in Arc
+    let node = Arc::new(ChordNode::new(address, Arc::new(RealNetworkClient)).await);
+
+    tokio::spawn(async move {
+        run(api_port).await.expect("Failed to run API server");
+    });
 
     node.join(bootstrap_address).await;
 
