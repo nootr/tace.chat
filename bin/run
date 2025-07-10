@@ -77,6 +77,11 @@ echo "Copying WASM files to public/..."
 cp webclient/pkg/wisp_webclient.js public/
 cp webclient/pkg/wisp_webclient_bg.wasm public/
 
+echo "Starting web server in public/ directory..."
+(cd public && python3 -m http.server 8000) &
+WEB_SERVER_PID=$!
+BACKGROUND_PIDS+=($WEB_SERVER_PID)
+
 
 
 # Build wisp_node once
