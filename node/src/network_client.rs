@@ -3,6 +3,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use wisp_lib::dht_messages::DhtMessage;
 
+#[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait NetworkClient: Send + Sync + 'static {
     async fn call_node(

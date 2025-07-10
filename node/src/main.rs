@@ -75,6 +75,29 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
+    #[cfg(test)]
+    pub fn new_for_test(address: String, network_client: Arc<T>) -> Self {
+        let id = Self::generate_node_id(&address);
+        let info = NodeInfo {
+            id,
+            address: address.clone(),
+        };
+
+        let successor = Arc::new(Mutex::new(info.clone()));
+        let predecessor = Arc::new(Mutex::new(None));
+        let finger_table = Arc::new(Mutex::<Vec<NodeInfo>>::new(vec![info.clone(); M]));
+        let data = Arc::new(Mutex::new(HashMap::new()));
+
+        ChordNode {
+            info,
+            successor,
+            predecessor,
+            finger_table,
+            data,
+            network_client,
+        }
+    }
+
     fn generate_node_id(address: &str) -> NodeId {
         let mut hasher = Sha1::new();
         hasher.update(address.as_bytes());
@@ -88,7 +111,9 @@ impl<T: NetworkClient> ChordNode<T> {
             hex::encode(self.info.id),
             self.info.address
         );
-        let listener = TcpListener::bind(&self.info.address).await.expect("Failed to bind to address");
+        let listener = TcpListener::bind(&self.info.address)
+            .await
+            .expect("Failed to bind to address");
 
         let node_clone = self.clone(); // Clone the Arc for each connection
         loop {
@@ -116,7 +141,7 @@ impl<T: NetworkClient> ChordNode<T> {
 
         match bincode::deserialize::<DhtMessage>(&buffer) {
             Ok(message) => {
-                log_info!(self.info.address, "Received message: {:?} " , message);
+                log_info!(self.info.address, "Received message: {:?} ", message);
 
                 let response = match message {
                     DhtMessage::FindSuccessor { id } => {
@@ -161,22 +186,33 @@ impl<T: NetworkClient> ChordNode<T> {
                     }
                     DhtMessage::Ping => DhtMessage::Pong,
                     _ => {
-                        log_error!(self.info.address, "Unsupported message received: {:?}", message);
+                        log_error!(
+                            self.info.address,
+                            "Unsupported message received: {:?}",
+                            message
+                        );
                         DhtMessage::Error {
                             message: "Unsupported message type".to_string(),
                         }
                     }
                 };
                 let encoded_response = bincode::serialize(&response).unwrap();
-                log_info!(self.info.address, "Sending response to {}: {:?}", socket.peer_addr().unwrap(), response);
+                log_info!(
+                    self.info.address,
+                    "Sending response to {}: {:?}",
+                    socket.peer_addr().unwrap(),
+                    response
+                );
                 if let Err(e) = socket.write_all(&encoded_response).await {
-                    log_error!(self.info.address, "Failed to write response to socket: {}", e);
-
+                    log_error!(
+                        self.info.address,
+                        "Failed to write response to socket: {}",
+                        e
+                    );
                 }
             }
             Err(e) => {
                 log_error!(self.info.address, "Failed to deserialize message: {}", e);
-
             }
         }
     }
@@ -186,7 +222,6 @@ impl<T: NetworkClient> ChordNode<T> {
         let mut data = self.data.lock().unwrap();
         data.insert(key, value);
         log_info!(self.info.address, "Stored key: {}", hex::encode(key));
-
     }
 
     // Retrieves a value by key from the DHT
@@ -195,22 +230,25 @@ impl<T: NetworkClient> ChordNode<T> {
         let value = data.get(&key).cloned();
         if value.is_some() {
             log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
-
         } else {
             log_info!(self.info.address, "Key not found: {}", hex::encode(key));
         }
         value
     }
 
-    
-
     pub async fn join(&self, bootstrap_address: Option<String>) {
         match bootstrap_address {
             Some(address) => {
-                log_info!(self.info.address, "Attempting to join network via bootstrap node: {}", address);
+                log_info!(
+                    self.info.address,
+                    "Attempting to join network via bootstrap node: {}",
+                    address
+                );
                 // Find successor from bootstrap node
-                let response =
-                    self.network_client.call_node(&address, DhtMessage::FindSuccessor { id: self.info.id }).await;
+                let response = self
+                    .network_client
+                    .call_node(&address, DhtMessage::FindSuccessor { id: self.info.id })
+                    .await;
                 match response {
                     Ok(DhtMessage::FoundSuccessor { id, address }) => {
                         let mut successor = self.successor.lock().unwrap();
@@ -223,12 +261,18 @@ impl<T: NetworkClient> ChordNode<T> {
                         );
                     }
                     _ => {
-                        log_error!(self.info.address, "Failed to get successor from bootstrap node.");
+                        log_error!(
+                            self.info.address,
+                            "Failed to get successor from bootstrap node."
+                        );
                     }
                 }
             }
             None => {
-                log_info!(self.info.address, "No bootstrap node provided. Starting a new network.");
+                log_info!(
+                    self.info.address,
+                    "No bootstrap node provided. Starting a new network."
+                );
                 self.start_new_network().await;
             }
         }
@@ -239,8 +283,10 @@ impl<T: NetworkClient> ChordNode<T> {
         *successor = self.info.clone();
         let mut predecessor = self.predecessor.lock().unwrap();
         *predecessor = None;
-        log_info!(self.info.address, "Started new network. I am the only node.");
-
+        log_info!(
+            self.info.address,
+            "Started new network. I am the only node."
+        );
     }
 
     // Finds the successor of an ID
@@ -258,10 +304,17 @@ impl<T: NetworkClient> ChordNode<T> {
         }
 
         // Call n_prime's find_successor
-        match self.network_client.call_node(&n_prime.address, DhtMessage::FindSuccessor { id }).await {
+        match self
+            .network_client
+            .call_node(&n_prime.address, DhtMessage::FindSuccessor { id })
+            .await
+        {
             Ok(DhtMessage::FoundSuccessor { id, address }) => NodeInfo { id, address },
             _ => {
-                log_error!(self.info.address, "Error: Failed to get successor from closest preceding node.");
+                log_error!(
+                    self.info.address,
+                    "Error: Failed to get successor from closest preceding node."
+                );
 
                 // Fallback to self's successor if remote call fails
                 self.successor.lock().unwrap().clone()
@@ -279,24 +332,36 @@ impl<T: NetworkClient> ChordNode<T> {
             if n_prime.id == self.info.id {
                 n_prime = self.closest_preceding_node(id).await;
             } else {
-                match self.network_client.call_node(&n_prime.address, DhtMessage::ClosestPrecedingNode { id })
+                match self
+                    .network_client
+                    .call_node(&n_prime.address, DhtMessage::ClosestPrecedingNode { id })
                     .await
                 {
                     Ok(DhtMessage::FoundClosestPrecedingNode { id, address }) => {
                         n_prime = NodeInfo { id, address };
                     }
                     _ => {
-                        log_error!(self.info.address, "Error: Failed to get closest preceding node from remote.");
+                        log_error!(
+                            self.info.address,
+                            "Error: Failed to get closest preceding node from remote."
+                        );
                     }
                 }
             }
             // Get the successor of the new n_prime
-            match self.network_client.call_node(&n_prime.address, DhtMessage::GetSuccessor).await {
+            match self
+                .network_client
+                .call_node(&n_prime.address, DhtMessage::GetSuccessor)
+                .await
+            {
                 Ok(DhtMessage::FoundSuccessor { id, address }) => {
                     current_successor = NodeInfo { id, address };
                 }
                 _ => {
-                    log_error!(self.info.address, "Error: Failed to get successor of n_prime.");
+                    log_error!(
+                        self.info.address,
+                        "Error: Failed to get successor of n_prime."
+                    );
                 }
             }
         }
@@ -331,7 +396,11 @@ impl<T: NetworkClient> ChordNode<T> {
         }
 
         // Get successor's predecessor
-        match self.network_client.call_node(&successor.address, DhtMessage::GetPredecessor).await {
+        match self
+            .network_client
+            .call_node(&successor.address, DhtMessage::GetPredecessor)
+            .await
+        {
             Ok(DhtMessage::Predecessor {
                 id: Some(x_id),
                 address: Some(x_address),
@@ -347,23 +416,26 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
             }
             _ => {
-                log_error!(self.info.address, "Error: Failed to get predecessor from successor.");
-
+                log_error!(
+                    self.info.address,
+                    "Error: Failed to get predecessor from successor."
+                );
             }
         }
         // Notify successor that we are its predecessor
         let current_successor = self.successor.lock().unwrap().clone();
-        if let Err(e) = self.network_client.call_node(
-            &current_successor.address,
-            DhtMessage::Notify {
-                id: self.info.id,
-                address: self.info.address.clone(),
-            },
-        )
-        .await
+        if let Err(e) = self
+            .network_client
+            .call_node(
+                &current_successor.address,
+                DhtMessage::Notify {
+                    id: self.info.id,
+                    address: self.info.address.clone(),
+                },
+            )
+            .await
         {
             log_error!(self.info.address, "Error notifying successor: {}", e);
-
         }
     }
 
@@ -382,7 +454,6 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub async fn fix_fingers(&self) {
-
         // Just acquire and release lock to test if that's the issue
         {
             let _finger_table = self.finger_table.lock().unwrap();
@@ -391,15 +462,17 @@ impl<T: NetworkClient> ChordNode<T> {
         // Now call find_successor
         let target_id = wisp_lib::add_id_power_of_2(&self.info.id, 0);
         let _successor = self.find_successor(target_id).await;
-
-
     }
 
     pub async fn check_predecessor(&self) {
         let predecessor_option = self.predecessor.lock().unwrap().clone();
         if let Some(predecessor) = predecessor_option {
             // Send a simple message to check if predecessor is alive
-            match self.network_client.call_node(&predecessor.address, DhtMessage::Ping).await {
+            match self
+                .network_client
+                .call_node(&predecessor.address, DhtMessage::Ping)
+                .await
+            {
                 Ok(DhtMessage::Pong) => {
                     // Predecessor is alive
                 }

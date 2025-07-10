@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
+    use crate::network_client::MockNetworkClient;
     use crate::{ChordNode, NodeInfo, M};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
-    use tokio::test;
-    use wisp_lib::dht_messages::NodeId;
+    use wisp_lib::dht_messages::{DhtMessage, NodeId};
 
     fn hex_to_node_id(hex_str: &str) -> NodeId {
         let mut id = [0u8; 20];
@@ -15,9 +15,10 @@ mod tests {
         id
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_start_new_network() {
-        let node = ChordNode::new("127.0.0.1:9000".to_string()).await;
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
         node.start_new_network().await;
 
         let successor = node.successor.lock().unwrap();
@@ -28,8 +29,9 @@ mod tests {
         assert!(predecessor.is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_closest_preceding_node() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
         let node_id = hex_to_node_id("0000000000000000000000000000000000000000");
         let node_address = "127.0.0.1:8000".to_string();
         let node_info = NodeInfo {
@@ -62,6 +64,7 @@ mod tests {
             predecessor: Arc::new(Mutex::new(None)),
             finger_table: Arc::new(Mutex::new(finger_table_vec)),
             data: Arc::new(Mutex::new(HashMap::new())),
+            network_client: mock_network_client,
         };
 
         // Test case 1: ID is far away, should return the largest finger
@@ -86,9 +89,10 @@ mod tests {
         assert_eq!(cpn_very_close.id, node_id);
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_store_and_retrieve() {
-        let node = ChordNode::new("127.0.0.1:9000".to_string()).await;
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
         let key = hex_to_node_id("1234567890123456789012345678901234567890");
         let value = vec![1, 2, 3, 4, 5];
 
@@ -105,9 +109,19 @@ mod tests {
         assert_eq!(retrieved_none, None);
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_check_predecessor_dead() {
-        let node = ChordNode::new("127.0.0.1:9000".to_string()).await;
+        let mut mock_network_client = MockNetworkClient::new();
+        mock_network_client
+            .expect_call_node()
+            .withf(|address, message| {
+                address == "127.0.0.1:9999" && matches!(message, DhtMessage::Ping)
+            })
+            .times(1)
+            .returning(|_, _| Err("Simulated network error".into()));
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
         let dead_predecessor_id = hex_to_node_id("1111111111111111111111111111111111111111");
         let dead_predecessor_address = "127.0.0.1:9999".to_string(); // Non-existent address
 
@@ -124,11 +138,12 @@ mod tests {
         assert!(updated_predecessor.is_none());
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_notify() {
-        let node_id = hex_to_node_id("0000000000000000000000000000000000000000");
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let _node_id = hex_to_node_id("0000000000000000000000000000000000000000");
         let node_address = "127.0.0.1:9000".to_string();
-        let node = ChordNode::new(node_address.clone()).await;
+        let node = ChordNode::new_for_test(node_address.clone(), mock_network_client);
 
         // Case 1: Predecessor is nil
         let n_prime_1 = NodeInfo {
@@ -136,7 +151,10 @@ mod tests {
             address: "127.0.0.1:9001".to_string(),
         };
         node.notify(n_prime_1.clone()).await;
-        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_1.id);
+        assert_eq!(
+            node.predecessor.lock().unwrap().clone().unwrap().id,
+            n_prime_1.id
+        );
 
         // Case 2: n_prime is between current predecessor and self
         let n_prime_2 = NodeInfo {
@@ -145,15 +163,136 @@ mod tests {
         };
         node.notify(n_prime_2.clone()).await;
         // Predecessor should still be n_prime_1 because n_prime_2 is not between n_prime_1 and node
-        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_1.id);
+        assert_eq!(
+            node.predecessor.lock().unwrap().clone().unwrap().id,
+            n_prime_1.id
+        );
 
         let n_prime_3 = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000000"), // This should be between n_prime_1 and node_id
             address: "127.0.0.1:9003".to_string(),
         };
         // Manually set predecessor to something that n_prime_3 is between
-        *node.predecessor.lock().unwrap() = Some(hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF").into());
+        let mut predecessor = node.predecessor.lock().unwrap();
+        *predecessor = Some(NodeInfo {
+            id: hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
+            address: "127.0.0.1:9004".to_string(),
+        });
+        drop(predecessor);
         node.notify(n_prime_3.clone()).await;
-        assert_eq!(node.predecessor.lock().unwrap().clone().unwrap().id, n_prime_3.id);
+        assert_eq!(
+            node.predecessor.lock().unwrap().clone().unwrap().id,
+            n_prime_3.id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_join() {
+        let mut mock_network_client = MockNetworkClient::new();
+        let bootstrap_node_id = hex_to_node_id("2222222222222222222222222222222222222222");
+        let bootstrap_node_address = "127.0.0.1:8001".to_string();
+
+        mock_network_client
+            .expect_call_node()
+            .withf(move |address, message| {
+                address == bootstrap_node_address
+                    && match message {
+                        DhtMessage::FindSuccessor { id: _ } => true,
+                        _ => false,
+                    }
+            })
+            .times(1)
+            .returning(move |_, _| {
+                Ok(DhtMessage::FoundSuccessor {
+                    id: bootstrap_node_id,
+                    address: "127.0.0.1:8001".to_string(),
+                })
+            });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+        node.join(Some("127.0.0.1:8001".to_string())).await;
+
+        let successor = node.successor.lock().unwrap();
+        assert_eq!(successor.id, bootstrap_node_id);
+        assert_eq!(successor.address, "127.0.0.1:8001");
+    }
+
+    #[tokio::test]
+    async fn test_find_successor() {
+        let mut mock_network_client = MockNetworkClient::new();
+        let successor_id = hex_to_node_id("3333333333333333333333333333333333333333");
+        let successor_address = "127.0.0.1:8002".to_string();
+        let successor_address_clone = successor_address.clone();
+
+        // This mock will be for the call to the closest preceding node
+        mock_network_client
+            .expect_call_node()
+            .times(1)
+            .returning(move |_, _| {
+                Ok(DhtMessage::FoundSuccessor {
+                    id: successor_id,
+                    address: successor_address_clone.clone(),
+                })
+            });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+        let finger_node_id = hex_to_node_id("2222222222222222222222222222222222222222");
+        let finger_node_address = "127.0.0.1:8001".to_string();
+        let mut finger_table = node.finger_table.lock().unwrap();
+        finger_table[0] = NodeInfo {
+            id: finger_node_id,
+            address: finger_node_address,
+        };
+        drop(finger_table);
+
+        let target_id = hex_to_node_id("4444444444444444444444444444444444444444");
+        let successor = node.find_successor(target_id).await;
+
+        assert_eq!(successor.id, successor_id);
+        assert_eq!(successor.address, successor_address);
+    }
+
+    #[tokio::test]
+    async fn test_stabilize() {
+        let mut mock_network_client = MockNetworkClient::new();
+        let successor_predecessor_id = hex_to_node_id("5555555555555555555555555555555555555555");
+        let successor_predecessor_address = "127.0.0.1:8003".to_string();
+        let successor_predecessor_address_clone = successor_predecessor_address.clone();
+
+        // Mock for GetPredecessor
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::GetPredecessor))
+            .times(1)
+            .returning(move |_, _| {
+                Ok(DhtMessage::Predecessor {
+                    id: Some(successor_predecessor_id),
+                    address: Some(successor_predecessor_address_clone.clone()),
+                })
+            });
+
+        // Mock for Notify
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::Notify { .. }))
+            .times(1)
+            .returning(|_, _| Ok(DhtMessage::Pong));
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+        let successor_id = hex_to_node_id("6666666666666666666666666666666666666666");
+        let successor_address = "127.0.0.1:8004".to_string();
+        *node.successor.lock().unwrap() = NodeInfo {
+            id: successor_id,
+            address: successor_address,
+        };
+
+        node.stabilize().await;
+
+        let new_successor = node.successor.lock().unwrap();
+        assert_eq!(new_successor.id, successor_predecessor_id);
+        assert_eq!(new_successor.address, successor_predecessor_address);
     }
 }
