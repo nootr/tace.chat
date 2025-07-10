@@ -9,20 +9,34 @@ use hyper::{
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
+use serde_json::json;
 use tokio::net::TcpListener;
 
-fn not_found() -> Response<Full<Bytes>> {
-    let mut response = Response::new(Full::new(Bytes::from("Not Found")));
-    *response.status_mut() = StatusCode::NOT_FOUND;
+fn format_response(
+    status: StatusCode,
+    body: impl Into<Bytes>,
+) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(body.into()));
+    *response.status_mut() = status;
     response.headers_mut().insert(
         hyper::header::CONTENT_TYPE,
-        hyper::header::HeaderValue::from_static("text/plain"),
+        hyper::header::HeaderValue::from_static("application/json"),
     );
     response
 }
 
+fn not_found() -> Response<Full<Bytes>> {
+    let mut response = format_response(
+        StatusCode::NOT_FOUND,
+        json!({ "error": "Not Found" }).to_string(),
+    );
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
+}
+
 fn ping(_req: Request<impl Body>) -> Response<Full<Bytes>> {
-    Response::new(Full::new(Bytes::from("pong")))
+    let response_body = json!({ "message": "pong" }).to_string();
+    format_response(StatusCode::OK, response_body)
 }
 
 async fn handler(req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
