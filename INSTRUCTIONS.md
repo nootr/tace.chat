@@ -35,7 +35,7 @@ project-root/
 * Avoid unnecessary comments
 * Use **early returns** to reduce nesting
 * One **hardcoded bootstrap node** in SPA
-* Messages use **TTL = 24h**; after expiry, **NACK** is sent back to sender
+* Messages are removed when node is full; after expiry, **NACK** is sent back to sender
 * Sender **polls for NACKs** the same way recipients poll for messages
 
 ---
@@ -74,7 +74,7 @@ project-root/
 
 ### 5. **Message Expiry + NACK Handling**
 
-* [ ] Implement background task for pruning expired messages
+* [ ] Prune expired messages when node is full
 * [ ] On expiry, trigger NACK message to sender node
 * [ ] Polling client can check for NACKs using `Retrieve`
 
@@ -129,7 +129,7 @@ project-root/
 * Each node runs a small TCP server
 * All routing happens via Chord DHT
 * Node keeps only routing table + recent messages
-* Messages are not stored permanently — TTL enforced
+* Messages are not stored permanently — nodes have limited storage, old messages are pruned when the node is full
 
 ---
 
