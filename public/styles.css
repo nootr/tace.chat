@@ -208,11 +208,17 @@ body {
 
 .message.sent {
     align-self: flex-end;
+}
+
+.message.sent .message-content {
     background-color: var(--message-sent-bg);
 }
 
 .message.received {
     align-self: flex-start;
+}
+
+.message.received .message-content {
     background-color: var(--message-received-bg);
 }
 

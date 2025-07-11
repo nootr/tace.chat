@@ -1,5 +1,5 @@
-use wasm_bindgen::prelude::*;
 use tace_lib::keys;
+use wasm_bindgen::prelude::*;
 
 // --- Key Generation ---
 
@@ -37,7 +37,11 @@ pub fn encrypt(
     their_public_key_hex: &str,
     plaintext: &str,
 ) -> Result<EncryptedMessage, JsValue> {
-    match keys::encrypt(my_private_key_hex, their_public_key_hex, plaintext.as_bytes()) {
+    match keys::encrypt(
+        my_private_key_hex,
+        their_public_key_hex,
+        plaintext.as_bytes(),
+    ) {
         Ok((ciphertext, nonce)) => Ok(EncryptedMessage { ciphertext, nonce }),
         Err(e) => Err(JsValue::from_str(&e)),
     }
@@ -55,7 +59,6 @@ pub fn decrypt(
         Err(e) => Err(JsValue::from_str(&e)),
     }
 }
-
 
 #[wasm_bindgen(start)]
 pub fn main_js() -> Result<(), JsValue> {

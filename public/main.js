@@ -203,13 +203,14 @@ async function sendMessage() {
         // 2. Prepare the message payload for the API
         const messagePayload = {
             to: contact.publicKey,
+            from: state.keys.public_key, // Include sender's public key
             // Convert Uint8Array to a regular array for JSON serialization
             ciphertext: Array.from(encrypted.ciphertext),
             nonce: Array.from(encrypted.nonce),
         };
 
         // 3. Send the message to the backend
-        const response = await fetch('/message', {
+        const response = await fetch('http://localhost:3000/message', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -296,6 +297,102 @@ function setupEventListeners() {
     });
 }
 
+// --- Message Polling ---
+let pollingInterval = null;
+
+async function pollMessages() {
+    if (!state.keys || !state.keys.public_key) return;
+    
+    try {
+        const response = await fetch(`http://localhost:3000/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+        
+        if (!response.ok) {
+            console.error('Failed to poll messages:', response.status);
+            return;
+        }
+        
+        const data = await response.json();
+        if (data.messages && data.messages.length > 0) {
+            // Process each message
+            for (const msg of data.messages) {
+                // Find the contact who sent this message by matching public key
+                const contact = state.contacts.find(c => c.publicKey === msg.from);
+                
+                if (!contact) {
+                    console.warn('Received message from unknown contact:', msg.from);
+                    continue;
+                }
+                
+                try {
+                    // Decrypt using the sender's public key
+                    const decryptedText = decrypt(
+                        state.keys.private_key, 
+                        contact.publicKey, 
+                        new Uint8Array(msg.ciphertext), 
+                        new Uint8Array(msg.nonce)
+                    );
+                    
+                    // Create message object
+                    const message = {
+                        id: Date.now() + Math.random(), // Ensure unique ID
+                        ciphertext: new Uint8Array(msg.ciphertext),
+                        nonce: new Uint8Array(msg.nonce),
+                        timestamp: new Date(msg.timestamp * 1000).toISOString(),
+                        sender: 'them',
+                    };
+                    
+                    if (!state.messages[contact.id]) {
+                        state.messages[contact.id] = [];
+                    }
+                    
+                    // Check if message already exists (avoid duplicates)
+                    const exists = state.messages[contact.id].some(m => 
+                        m.timestamp === message.timestamp && 
+                        m.sender === 'them'
+                    );
+                    
+                    if (!exists) {
+                        state.messages[contact.id].push(message);
+                        
+                        // Update UI if this contact is active
+                        if (state.activeContactId === contact.id) {
+                            renderChatWindow();
+                        }
+                        renderContactList();
+                        saveState();
+                        
+                        console.log('Received message from', contact.name);
+                    }
+                } catch (e) {
+                    console.error('Failed to decrypt message from', contact.name, e);
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Error polling messages:', e);
+    }
+}
+
+function startPolling() {
+    // Poll immediately
+    pollMessages();
+    
+    // Then poll every 5 seconds
+    pollingInterval = setInterval(pollMessages, 5000);
+}
+
+function stopPolling() {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+}
+
 // --- Initialization ---
 async function main() {
     await init(); // Initialize the WASM module
@@ -314,6 +411,7 @@ async function main() {
     renderContactList();
     renderChatWindow();
     setupEventListeners();
+    startPolling(); // Start polling for messages
     console.log('App Initialized with encryption. State:', state);
 }
 

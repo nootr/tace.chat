@@ -9,8 +9,8 @@ use tokio::net::{TcpListener, TcpStream};
 mod api;
 mod network_client;
 
-use api::run;
-use network_client::{NetworkClient, RealNetworkClient};
+pub use api::run;
+pub use network_client::{NetworkClient, RealNetworkClient};
 
 macro_rules! log_info {
     ($address:expr, $($arg:tt)*) => ({
@@ -500,8 +500,11 @@ async fn main() {
 
     let node = Arc::new(ChordNode::new(address, Arc::new(RealNetworkClient)).await);
 
+    let node_for_api = node.clone();
     tokio::spawn(async move {
-        run(api_port).await.expect("Failed to run API server");
+        run(api_port, node_for_api)
+            .await
+            .expect("Failed to run API server");
     });
 
     node.join(bootstrap_address).await;
