@@ -167,6 +167,7 @@ body {
     padding: 12px;
     cursor: pointer;
     transition: background-color 0.15s;
+    position: relative;
 }
 
 .contact:hover {
@@ -196,6 +197,19 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 250px;
+}
+
+.unknown-badge {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background-color: var(--primary-bg);
+    color: var(--white);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
 }
 
 #chat-header {

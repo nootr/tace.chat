@@ -107,12 +107,17 @@ function renderContactList() {
         const contactEl = document.createElement('div');
         contactEl.className = `contact ${contact.id === state.activeContactId ? 'active' : ''}`;
         contactEl.dataset.contactId = contact.id;
+
+        // Check if this is an unknown contact
+        const isUnknown = contact.name.startsWith('Unknown (');
+
         contactEl.innerHTML = `
             <img src="img/logo.png" alt="User" class="profile-pic">
             <div class="contact-details">
                 <div class="contact-name">${contact.name}</div>
                 <div class="last-message">${getLastMessage(contact.id)}</div>
             </div>
+            ${isUnknown ? '<span class="unknown-badge">New</span>' : ''}
         `;
         contactEl.addEventListener('click', () => selectContact(contact.id));
         contactList.appendChild(contactEl);
@@ -134,11 +139,22 @@ async function renderChatWindow() {
     // If we have an active chat, the no-chat-selected element inside the window is removed,
     // so we don't need to hide it.
     const contact = state.contacts.find(c => c.id === state.activeContactId);
+    const isUnknown = contact.name.startsWith('Unknown (');
+
     chatHeader.innerHTML = `
         <img src="img/logo.png" alt="Profile" class="profile-pic">
         <div class="chat-info">
             <div class="chat-name">${contact.name}</div>
+            ${isUnknown ? `<div class="chat-status">Public key: ${contact.publicKey.substring(0, 16)}...</div>` : ''}
         </div>
+        ${isUnknown ? `
+        <div class="header-icons">
+            <button onclick="renameContact('${contact.id}')" title="Rename Contact">
+                <svg viewBox="0 0 24 24" width="20" height="20">
+                    <path fill="currentColor" d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"></path>
+                </svg>
+            </button>
+        </div>` : ''}
     `;
 
     chatWindow.innerHTML = '';
@@ -188,6 +204,22 @@ function selectContact(contactId) {
     renderContactList();
     renderChatWindow();
 }
+
+function renameContact(contactId) {
+    const contact = state.contacts.find(c => c.id === contactId);
+    if (!contact) return;
+
+    const newName = prompt(`Enter a new name for this contact:\n\nPublic key: ${contact.publicKey}`, contact.name);
+    if (newName && newName.trim()) {
+        contact.name = newName.trim();
+        saveState();
+        renderContactList();
+        renderChatWindow();
+    }
+}
+
+// Make renameContact available globally for onclick
+window.renameContact = renameContact;
 
 async function sendMessage() {
     const text = messageInput.value.trim();
@@ -302,7 +334,7 @@ let pollingInterval = null;
 
 async function pollMessages() {
     if (!state.keys || !state.keys.public_key) return;
-    
+
     try {
         const response = await fetch(`http://localhost:3000/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
             method: 'GET',
@@ -310,33 +342,56 @@ async function pollMessages() {
                 'Content-Type': 'application/json',
             },
         });
-        
+
         if (!response.ok) {
             console.error('Failed to poll messages:', response.status);
             return;
         }
-        
+
         const data = await response.json();
         if (data.messages && data.messages.length > 0) {
             // Process each message
             for (const msg of data.messages) {
                 // Find the contact who sent this message by matching public key
-                const contact = state.contacts.find(c => c.publicKey === msg.from);
-                
+                let contact = state.contacts.find(c => c.publicKey === msg.from);
+
                 if (!contact) {
-                    console.warn('Received message from unknown contact:', msg.from);
-                    continue;
+                    // Create a new contact for unknown sender
+                    console.log('Received message from unknown contact:', msg.from);
+
+                    // Try to decrypt first to make sure we can read the message
+                    try {
+                        const decryptedText = decrypt(
+                            state.keys.private_key,
+                            msg.from,
+                            new Uint8Array(msg.ciphertext),
+                            new Uint8Array(msg.nonce)
+                        );
+
+                        // If decryption succeeded, create the contact
+                        contact = {
+                            id: `contact_${Date.now()}_${Math.random()}`,
+                            name: `Unknown (${msg.from.substring(0, 8)}...)`,
+                            publicKey: msg.from
+                        };
+
+                        state.contacts.push(contact);
+                        console.log('Added unknown contact:', contact.name);
+                    } catch (e) {
+                        console.error('Failed to decrypt message from unknown sender:', msg.from, e);
+                        continue;
+                    }
                 }
-                
+
                 try {
                     // Decrypt using the sender's public key
                     const decryptedText = decrypt(
-                        state.keys.private_key, 
-                        contact.publicKey, 
-                        new Uint8Array(msg.ciphertext), 
+                        state.keys.private_key,
+                        contact.publicKey,
+                        new Uint8Array(msg.ciphertext),
                         new Uint8Array(msg.nonce)
                     );
-                    
+
                     // Create message object
                     const message = {
                         id: Date.now() + Math.random(), // Ensure unique ID
@@ -345,27 +400,27 @@ async function pollMessages() {
                         timestamp: new Date(msg.timestamp * 1000).toISOString(),
                         sender: 'them',
                     };
-                    
+
                     if (!state.messages[contact.id]) {
                         state.messages[contact.id] = [];
                     }
-                    
+
                     // Check if message already exists (avoid duplicates)
-                    const exists = state.messages[contact.id].some(m => 
-                        m.timestamp === message.timestamp && 
+                    const exists = state.messages[contact.id].some(m =>
+                        m.timestamp === message.timestamp &&
                         m.sender === 'them'
                     );
-                    
+
                     if (!exists) {
                         state.messages[contact.id].push(message);
-                        
+
                         // Update UI if this contact is active
                         if (state.activeContactId === contact.id) {
                             renderChatWindow();
                         }
                         renderContactList();
                         saveState();
-                        
+
                         console.log('Received message from', contact.name);
                     }
                 } catch (e) {
@@ -381,7 +436,7 @@ async function pollMessages() {
 function startPolling() {
     // Poll immediately
     pollMessages();
-    
+
     // Then poll every 5 seconds
     pollingInterval = setInterval(pollMessages, 5000);
 }
