@@ -1,4 +1,4 @@
-# tace.chat
+<img alt="tace.chat logo" src="img/logo.png" width="300">
 
 _Real privacy. Just you and the person you're talking to._
 
@@ -56,11 +56,9 @@ Please visit [GitHub](https://github.com/nootr/tace.chat) to get started.
 
 Found a security issue? Please report it privately to jorishartog@hotmail.com.
 
-## License
+## Disclaimer
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-### Disclaimer
+**Privacy is your right. How you use it is your responsibility.**
 
 tace.chat is free and open-source software provided **as is**, with **no warranty** of any kind.  
 
@@ -70,4 +68,4 @@ By using this software, you agree that:
 - The developers of tace.chat are **not liable** for any loss, damage, or legal issues arising from its use.
 - You will comply with all applicable laws and regulations in your jurisdiction.
 
-Privacy is your right. How you use it is your responsibility.
+For more information, see [LICENSE](LICENSE) for details.
