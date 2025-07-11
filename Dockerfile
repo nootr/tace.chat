@@ -23,10 +23,9 @@ RUN rm /etc/nginx/conf.d/default.conf
 # Copy custom Nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built webclient files
-COPY --from=builder /app/webclient/pkg /usr/share/nginx/html/
-COPY public/index.html /usr/share/nginx/html/
-COPY public/main.js /usr/share/nginx/html/
+# Copy built webclient and all public assets
+COPY --from=builder /app/webclient/pkg /usr/share/nginx/html/webclient/pkg
+COPY public /usr/share/nginx/html
 
 EXPOSE 80
 

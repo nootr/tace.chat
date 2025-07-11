@@ -1,5 +1,6 @@
 // Shared Rust library
 pub mod dht_messages;
+pub mod keys;
 
 use num_bigint::BigUint;
 use num_traits::identities::One;
