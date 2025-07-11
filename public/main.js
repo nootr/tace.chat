@@ -189,7 +189,7 @@ function selectContact(contactId) {
     renderChatWindow();
 }
 
-function sendMessage() {
+async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text || !state.activeContactId) return;
 
@@ -197,7 +197,34 @@ function sendMessage() {
     if (!contact) return;
 
     try {
+        // 1. Encrypt the message
         const encrypted = encrypt(state.keys.private_key, contact.publicKey, text);
+
+        // 2. Prepare the message payload for the API
+        const messagePayload = {
+            to: contact.publicKey,
+            // Convert Uint8Array to a regular array for JSON serialization
+            ciphertext: Array.from(encrypted.ciphertext),
+            nonce: Array.from(encrypted.nonce),
+        };
+
+        // 3. Send the message to the backend
+        const response = await fetch('/message', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(messagePayload),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            console.error('Failed to send message:', errorData);
+            alert(`Failed to send message: ${errorData.error || 'Unknown error'}`);
+            return;
+        }
+
+        // 4. If sending is successful, save to local state and update UI
         const message = {
             id: Date.now(),
             ciphertext: encrypted.ciphertext,
@@ -215,9 +242,10 @@ function sendMessage() {
         renderChatWindow();
         renderContactList();
         messageInput.value = '';
+
     } catch (e) {
-        console.error("Encryption failed:", e);
-        alert("Failed to send message. Could not encrypt.");
+        console.error("Encryption or network error:", e);
+        alert("Failed to send message. Could not encrypt or send.");
     }
 }
 

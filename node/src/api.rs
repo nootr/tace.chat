@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{
@@ -9,8 +9,16 @@ use hyper::{
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
+use serde::Deserialize;
 use serde_json::json;
 use tokio::net::TcpListener;
+
+#[derive(Deserialize, Debug)]
+struct MessagePayload {
+    to: String,
+    ciphertext: Vec<u8>,
+    nonce: Vec<u8>,
+}
 
 fn format_response(
     status: StatusCode,
@@ -39,15 +47,47 @@ fn ping(_req: Request<impl Body>) -> Response<Full<Bytes>> {
     format_response(StatusCode::OK, response_body)
 }
 
+async fn message_handler(
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    let body_bytes = match req.collect().await {
+        Ok(body) => body.to_bytes(),
+        Err(e) => {
+            eprintln!("Error reading request body: {}", e);
+            return Ok(format_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Failed to read request body" }).to_string(),
+            ));
+        }
+    };
+
+    let message_payload: MessagePayload = match serde_json::from_slice(&body_bytes) {
+        Ok(payload) => payload,
+        Err(e) => {
+            eprintln!("Failed to deserialize message payload: {}", e);
+            return Ok(format_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Invalid JSON payload" }).to_string(),
+            ));
+        }
+    };
+
+    println!("Received message: {:?}", message_payload);
+
+    let response_body = json!({ "status": "message received" }).to_string();
+    Ok(format_response(StatusCode::OK, response_body))
+}
+
 async fn handler(req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, Infallible> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/ping") => Ok(ping(req)),
+        (&Method::POST, "/message") => message_handler(req).await,
         _ => Ok(not_found()),
     }
 }
 
 pub async fn run(port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(addr).await?;
 
     println!("API is listening on http://{}", addr);

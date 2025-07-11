@@ -1,0 +1,23 @@
+FROM rust:1.88.0 AS builder
+
+WORKDIR /app
+
+# Copy necessary files for building
+COPY Cargo.toml .
+COPY lib lib
+COPY node node
+COPY webclient webclient
+
+# Build the node
+RUN cargo build --release --package tace_node
+
+# Stage 2: Run the node
+FROM debian:bookworm-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/tace_node .
+
+EXPOSE 3000
+
+CMD ["./tace_node"]

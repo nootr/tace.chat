@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   webclient:
     build:
@@ -7,3 +5,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8081:80"
+
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3000:3000"
