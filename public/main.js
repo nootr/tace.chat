@@ -6,13 +6,16 @@ const chatHeader = document.getElementById('chat-header');
 const chatWindow = document.getElementById('chat-window');
 const messageInput = document.getElementById('message-input');
 const sendBtn = document.getElementById('send-btn');
-const noChatSelected = document.querySelector('.no-chat-selected');
 
 // Modals & Buttons
 const settingsModal = document.getElementById('settings-modal');
 const addContactModal = document.getElementById('add-contact-modal');
 const userPublicKeyText = document.getElementById('user-public-key');
 const addContactForm = document.getElementById('add-contact-form');
+
+// Network nodes
+const bootstrapNode = 'node1:3001';
+let node = bootstrapNode;
 
 // --- State ---
 let state = {
@@ -31,6 +34,33 @@ function saveState() {
     } catch (error) {
         console.error("Failed to save state:", error);
     }
+}
+
+function loadNodeUrl() {
+    fetch(`http://${node}/connect`, {
+        method: 'GET',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`Failed to fetch node URL: ${response.status} ${response.statusText}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data && data.node) {
+            node = data.node;
+            console.log('Connected to node: ', node);
+        } else {
+            throw new Error('Invalid response from /connect');
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching node URL:', error);
+        node = bootstrapNode;
+    });
 }
 
 function loadState() {
@@ -112,7 +142,7 @@ function renderContactList() {
         const isUnknown = contact.name.startsWith('Unknown (');
 
         contactEl.innerHTML = `
-            <img src="img/logo.png" alt="User" class="profile-pic">
+            <img src="#" alt="User" class="profile-pic">
             <div class="contact-details">
                 <div class="contact-name">${contact.name}</div>
                 <div class="last-message">${getLastMessage(contact.id)}</div>
@@ -125,12 +155,10 @@ function renderContactList() {
 }
 
 async function renderChatWindow() {
-    const noChatSelectedEl = document.querySelector('.no-chat-selected');
-
     if (!state.activeContactId) {
         chatHeader.innerHTML = '';
         // Ensure the placeholder is visible and the chat window is cleared.
-        chatWindow.innerHTML = '<div class="no-chat-selected" style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center; color: var(--text-secondary);"><img src="img/logo.png" alt="Tace Chat" class="logo-large"><h1>Tace Chat</h1><p>Select a chat to start messaging.</p></div>';
+        chatWindow.innerHTML = '<div class="no-chat-selected" style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center; color: var(--text-secondary);"><img src="#" alt="Tace Chat" class="logo-large"><h1>Tace Chat</h1><p>Select a chat to start messaging.</p></div>';
         messageInput.disabled = true;
         sendBtn.disabled = true;
         return;
@@ -142,7 +170,7 @@ async function renderChatWindow() {
     const isUnknown = contact.name.startsWith('Unknown (');
 
     chatHeader.innerHTML = `
-        <img src="img/logo.png" alt="Profile" class="profile-pic">
+        <img src="#" alt="Profile" class="profile-pic">
         <div class="chat-info">
             <div class="chat-name">${contact.name}</div>
             ${isUnknown ? `<div class="chat-status">Public key: ${contact.publicKey.substring(0, 16)}...</div>` : ''}
@@ -242,7 +270,7 @@ async function sendMessage() {
         };
 
         // 3. Send the message to the backend
-        const response = await fetch('http://localhost:3001/message', {
+        const response = await fetch(`http://${node}/message`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -336,7 +364,7 @@ async function pollMessages() {
     if (!state.keys || !state.keys.public_key) return;
 
     try {
-        const response = await fetch(`http://localhost:3001/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
+        const response = await fetch(`http://${node}/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',
@@ -452,6 +480,7 @@ function stopPolling() {
 async function main() {
     await init(); // Initialize the WASM module
 
+    loadNodeUrl();
     loadState();
     if (!state.keys) {
         console.log('No keys found, generating new ones via WASM...');

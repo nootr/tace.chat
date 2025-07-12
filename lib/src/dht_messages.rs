@@ -17,11 +17,13 @@ pub enum DhtMessage {
     FoundSuccessor {
         id: NodeId,
         address: String,
+        api_address: String,
     },
     // Notify a node that we believe we are its predecessor
     Notify {
         id: NodeId,
         address: String,
+        api_address: String,
     },
     // Request for a node's predecessor
     GetPredecessor,
@@ -29,6 +31,7 @@ pub enum DhtMessage {
     Predecessor {
         id: Option<NodeId>,
         address: Option<String>,
+        api_address: Option<String>,
     },
     // Store a key-value pair
     Store {
@@ -52,6 +55,7 @@ pub enum DhtMessage {
     FoundClosestPrecedingNode {
         id: NodeId,
         address: String,
+        api_address: String,
     },
     // Request for a node's successor
     GetSuccessor,

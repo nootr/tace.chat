@@ -34,9 +34,10 @@ const M: usize = 160; // Number of bits in Chord ID space (SHA-1 produces 160-bi
 pub struct NodeInfo {
     pub id: NodeId,
     pub address: String,
+    pub api_address: String,
 }
 
-#[derive(Debug)] // Keep Debug, remove Clone
+#[derive(Debug)]
 pub struct ChordNode<T: NetworkClient> {
     pub info: NodeInfo,
     pub successor: Arc<Mutex<NodeInfo>>,
@@ -62,11 +63,12 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
 }
 
 impl<T: NetworkClient> ChordNode<T> {
-    pub async fn new(address: String, network_client: Arc<T>) -> Self {
+    pub async fn new(address: String, api_address: String, network_client: Arc<T>) -> Self {
         let id = Self::generate_node_id(&address);
         let info = NodeInfo {
             id,
             address: address.clone(),
+            api_address,
         };
 
         let successor = Arc::new(Mutex::new(info.clone()));
@@ -91,6 +93,7 @@ impl<T: NetworkClient> ChordNode<T> {
         let info = NodeInfo {
             id,
             address: address.clone(),
+            api_address: address.clone(),
         };
 
         let successor = Arc::new(Mutex::new(info.clone()));
@@ -161,6 +164,7 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::FoundSuccessor {
                             id: successor.id,
                             address: successor.address,
+                            api_address: successor.api_address,
                         }
                     }
                     DhtMessage::GetSuccessor => {
@@ -168,6 +172,7 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::FoundSuccessor {
                             id: successor.id,
                             address: successor.address,
+                            api_address: successor.api_address,
                         }
                     }
                     DhtMessage::ClosestPrecedingNode { id } => {
@@ -175,6 +180,7 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::FoundClosestPrecedingNode {
                             id: cpn.id,
                             address: cpn.address,
+                            api_address: cpn.api_address,
                         }
                     }
                     DhtMessage::Store { key, value } => {
@@ -190,10 +196,20 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::Predecessor {
                             id: predecessor.as_ref().map(|p| p.id),
                             address: predecessor.as_ref().map(|p| p.address.clone()),
+                            api_address: predecessor.as_ref().map(|p| p.api_address.clone()),
                         }
                     }
-                    DhtMessage::Notify { id, address } => {
-                        self.notify(NodeInfo { id, address }).await;
+                    DhtMessage::Notify {
+                        id,
+                        address,
+                        api_address,
+                    } => {
+                        self.notify(NodeInfo {
+                            id,
+                            address,
+                            api_address,
+                        })
+                        .await;
                         DhtMessage::Pong // Send a Pong response
                     }
                     DhtMessage::Ping => DhtMessage::Pong,
@@ -266,9 +282,17 @@ impl<T: NetworkClient> ChordNode<T> {
                     .call_node(&address, DhtMessage::FindSuccessor { id: self.info.id })
                     .await;
                 match response {
-                    Ok(DhtMessage::FoundSuccessor { id, address }) => {
+                    Ok(DhtMessage::FoundSuccessor {
+                        id,
+                        address,
+                        api_address,
+                    }) => {
                         let mut successor = self.successor.lock().unwrap();
-                        *successor = NodeInfo { id, address };
+                        *successor = NodeInfo {
+                            id,
+                            address,
+                            api_address,
+                        };
                         log_info!(
                             self.info.address,
                             "Joined network. Successor: {} at {}",
@@ -333,7 +357,15 @@ impl<T: NetworkClient> ChordNode<T> {
             .call_node(&n_prime.address, DhtMessage::FindSuccessor { id })
             .await
         {
-            Ok(DhtMessage::FoundSuccessor { id, address }) => NodeInfo { id, address },
+            Ok(DhtMessage::FoundSuccessor {
+                id,
+                address,
+                api_address,
+            }) => NodeInfo {
+                id,
+                address,
+                api_address,
+            },
             _ => {
                 log_error!(
                     self.info.address,
@@ -361,8 +393,16 @@ impl<T: NetworkClient> ChordNode<T> {
                     .call_node(&n_prime.address, DhtMessage::ClosestPrecedingNode { id })
                     .await
                 {
-                    Ok(DhtMessage::FoundClosestPrecedingNode { id, address }) => {
-                        n_prime = NodeInfo { id, address };
+                    Ok(DhtMessage::FoundClosestPrecedingNode {
+                        id,
+                        address,
+                        api_address,
+                    }) => {
+                        n_prime = NodeInfo {
+                            id,
+                            address,
+                            api_address,
+                        };
                     }
                     _ => {
                         log_error!(
@@ -378,8 +418,16 @@ impl<T: NetworkClient> ChordNode<T> {
                 .call_node(&n_prime.address, DhtMessage::GetSuccessor)
                 .await
             {
-                Ok(DhtMessage::FoundSuccessor { id, address }) => {
-                    current_successor = NodeInfo { id, address };
+                Ok(DhtMessage::FoundSuccessor {
+                    id,
+                    address,
+                    api_address,
+                }) => {
+                    current_successor = NodeInfo {
+                        id,
+                        address,
+                        api_address,
+                    };
                 }
                 _ => {
                     log_error!(
@@ -442,10 +490,12 @@ impl<T: NetworkClient> ChordNode<T> {
             Ok(DhtMessage::Predecessor {
                 id: Some(x_id),
                 address: Some(x_address),
+                api_address: Some(x_api_address),
             }) => {
                 let x = NodeInfo {
                     id: x_id,
                     address: x_address,
+                    api_address: x_api_address,
                 };
                 debug!(
                     "[{}] Stabilize: successor's predecessor is {}",
@@ -470,6 +520,7 @@ impl<T: NetworkClient> ChordNode<T> {
             Ok(DhtMessage::Predecessor {
                 id: None,
                 address: None,
+                api_address: None,
             }) => {
                 debug!(
                     "[{}] Stabilize: successor {} has no predecessor",
@@ -498,6 +549,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 DhtMessage::Notify {
                     id: self.info.id,
                     address: self.info.address.clone(),
+                    api_address: self.info.api_address.clone(),
                 },
             )
             .await
@@ -776,18 +828,21 @@ async fn main() {
 
     let advertise_address =
         env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
+    let (advertise_host, advertise_port) = advertise_address
+        .split_once(':')
+        .expect("NODE_ADDRESS must be in the format HOST:PORT");
     let bind_address = env::var("BIND_ADDRESS").unwrap_or_else(|_| {
-        // If BIND_ADDRESS is not set, extract port from NODE_ADDRESS and bind to 0.0.0.0
-        let port = advertise_address.split(':').nth(1).unwrap_or("8000");
-        format!("0.0.0.0:{}", port)
+        format!("0.0.0.0:{}", advertise_port)
     });
     let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
-    let api_port = env::var("API_PORT")
-        .unwrap_or_else(|_| "3000".to_string())
+    let api_port: u16 = env::var("API_PORT")
+        .unwrap_or_else(|_| "8001".to_string())
         .parse()
-        .expect("API_PORT must be a valid integer");
+        .expect("API_PORT must be a valid u16");
+    let api_address = format!("{}:{}", advertise_host, api_port);
 
-    let node = Arc::new(ChordNode::new(advertise_address, Arc::new(RealNetworkClient)).await);
+    let node =
+        Arc::new(ChordNode::new(advertise_address, api_address, Arc::new(RealNetworkClient)).await);
 
     let node_for_api = node.clone();
     tokio::spawn(async move {

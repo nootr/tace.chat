@@ -11,14 +11,14 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3001:3000"
+      - "3001:3001"
       - "8001:8001"
     environment:
       - RUST_LOG=debug
       - NODE_ADDRESS=node1:8001
-      - API_PORT=3000
+      - API_PORT=3001
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:3001/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -28,18 +28,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3002:3000"
+      - "3002:3002"
       - "8002:8002"
     environment:
       - RUST_LOG=debug
       - NODE_ADDRESS=node2:8002
-      - API_PORT=3000
+      - API_PORT=3002
       - BOOTSTRAP_ADDRESS=node1:8001
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:3002/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -49,18 +49,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3003:3000"
+      - "3003:3003"
       - "8003:8003"
     environment:
       - RUST_LOG=debug
       - NODE_ADDRESS=node3:8003
-      - API_PORT=3000
+      - API_PORT=3003
       - BOOTSTRAP_ADDRESS=node1:8001
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:3003/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -70,13 +70,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3004:3000"
+      - "3004:3004"
       - "8004:8004"
     environment:
       - RUST_LOG=debug
       - NODE_ADDRESS=node4:8004
-      - API_PORT=3000
+      - API_PORT=3004
       - BOOTSTRAP_ADDRESS=node1:8001
     depends_on:
       node1:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

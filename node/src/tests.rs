@@ -37,6 +37,7 @@ mod tests {
         let node_info = NodeInfo {
             id: node_id,
             address: node_address.clone(),
+            api_address: node_address.clone(),
         };
 
         let mut finger_table_vec = vec![node_info.clone(); M];
@@ -48,14 +49,17 @@ mod tests {
         finger_table_vec[0] = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000001"),
             address: "127.0.0.1:8001".to_string(),
+            api_address: "127.0.0.1:8001".to_string(),
         };
         finger_table_vec[1] = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000002"),
             address: "127.0.0.1:8002".to_string(),
+            api_address: "127.0.0.1:8002".to_string(),
         };
         finger_table_vec[M - 1] = NodeInfo {
             id: hex_to_node_id("7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
             address: "127.0.0.1:8003".to_string(),
+            api_address: "127.0.0.1:8003".to_string(),
         };
 
         let node = ChordNode {
@@ -129,7 +133,8 @@ mod tests {
         let mut predecessor = node.predecessor.lock().unwrap();
         *predecessor = Some(NodeInfo {
             id: dead_predecessor_id,
-            address: dead_predecessor_address,
+            address: dead_predecessor_address.clone(),
+            api_address: dead_predecessor_address,
         });
         drop(predecessor); // Release lock
 
@@ -150,6 +155,7 @@ mod tests {
         let n_prime_1 = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000001"),
             address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
         };
         node.notify(n_prime_1.clone()).await;
         assert_eq!(
@@ -161,6 +167,7 @@ mod tests {
         let n_prime_2 = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000000"), // Same as node_id, should not update
             address: "127.0.0.1:9002".to_string(),
+            api_address: "127.0.0.1:9002".to_string(),
         };
         node.notify(n_prime_2.clone()).await;
         // Predecessor should still be n_prime_1 because n_prime_2 is not between n_prime_1 and node
@@ -172,12 +179,14 @@ mod tests {
         let n_prime_3 = NodeInfo {
             id: hex_to_node_id("0000000000000000000000000000000000000000"), // This should be between n_prime_1 and node_id
             address: "127.0.0.1:9003".to_string(),
+            api_address: "127.0.0.1:9003".to_string(),
         };
         // Manually set predecessor to something that n_prime_3 is between
         let mut predecessor = node.predecessor.lock().unwrap();
         *predecessor = Some(NodeInfo {
             id: hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"),
             address: "127.0.0.1:9004".to_string(),
+            api_address: "127.0.0.1:9004".to_string(),
         });
         drop(predecessor);
         node.notify(n_prime_3.clone()).await;
@@ -207,6 +216,7 @@ mod tests {
                 Ok(DhtMessage::FoundSuccessor {
                     id: bootstrap_node_id,
                     address: "127.0.0.1:8001".to_string(),
+                    api_address: "127.0.0.1:8001".to_string(),
                 })
             });
 
@@ -234,6 +244,7 @@ mod tests {
                 Ok(DhtMessage::FoundSuccessor {
                     id: successor_id,
                     address: successor_address_clone.clone(),
+                    api_address: successor_address_clone.clone(),
                 })
             });
 
@@ -244,7 +255,8 @@ mod tests {
         let mut finger_table = node.finger_table.lock().unwrap();
         finger_table[0] = NodeInfo {
             id: finger_node_id,
-            address: finger_node_address,
+            address: finger_node_address.clone(),
+            api_address: finger_node_address,
         };
         drop(finger_table);
 
@@ -271,6 +283,7 @@ mod tests {
                 Ok(DhtMessage::Predecessor {
                     id: Some(successor_predecessor_id),
                     address: Some(successor_predecessor_address_clone.clone()),
+                    api_address: Some(successor_predecessor_address_clone.clone()),
                 })
             });
 
@@ -287,7 +300,8 @@ mod tests {
         let successor_address = "127.0.0.1:8004".to_string();
         *node.successor.lock().unwrap() = NodeInfo {
             id: successor_id,
-            address: successor_address,
+            address: successor_address.clone(),
+            api_address: successor_address,
         };
 
         node.stabilize().await;
@@ -325,11 +339,13 @@ mod tests {
         *node.predecessor.lock().unwrap() = Some(NodeInfo {
             id: predecessor_id,
             address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
         });
 
         *node.successor.lock().unwrap() = NodeInfo {
             id: successor_id,
             address: "127.0.0.1:9002".to_string(),
+            api_address: "127.0.0.1:9002".to_string(),
         };
 
         let estimate = node.calculate_local_network_size_estimate();
@@ -358,6 +374,7 @@ mod tests {
         let successor = NodeInfo {
             id: hex_to_node_id("1111111111111111111111111111111111111111"),
             address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
         };
         *node.successor.lock().unwrap() = successor.clone();
 
@@ -367,6 +384,7 @@ mod tests {
         finger_table[1] = NodeInfo {
             id: hex_to_node_id("2222222222222222222222222222222222222222"),
             address: "127.0.0.1:9002".to_string(),
+            api_address: "127.0.0.1:9002".to_string(),
         };
         drop(finger_table);
 
@@ -457,6 +475,7 @@ mod tests {
         let successor = NodeInfo {
             id: hex_to_node_id("1111111111111111111111111111111111111111"),
             address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
         };
         *node.successor.lock().unwrap() = successor.clone();
 
@@ -466,10 +485,12 @@ mod tests {
         finger_table[1] = NodeInfo {
             id: hex_to_node_id("2222222222222222222222222222222222222222"),
             address: "127.0.0.1:9002".to_string(),
+            api_address: "127.0.0.1:9002".to_string(),
         };
         finger_table[2] = NodeInfo {
             id: hex_to_node_id("3333333333333333333333333333333333333333"),
             address: "127.0.0.1:9003".to_string(),
+            api_address: "127.0.0.1:9003".to_string(),
         };
         drop(finger_table);
 
@@ -484,15 +505,11 @@ mod tests {
     #[tokio::test]
     async fn test_ring_formation_simulation() {
         // This test simulates a simple 3-node ring formation to verify the logic
-        use std::collections::HashMap;
 
         // Create mock clients for 3 nodes
-        let mut node1_client = MockNetworkClient::new();
-        let mut node2_client = MockNetworkClient::new();
-        let mut node3_client = MockNetworkClient::new();
+        let node1_client = MockNetworkClient::new();
 
         // Node IDs in order: node1 < node2 < node3
-        let node1_id = hex_to_node_id("1000000000000000000000000000000000000000");
         let node2_id = hex_to_node_id("6000000000000000000000000000000000000000");
         let node3_id = hex_to_node_id("A000000000000000000000000000000000000000");
 
@@ -508,11 +525,13 @@ mod tests {
         *node1.successor.lock().unwrap() = NodeInfo {
             id: node2_id,
             address: "node2:8002".to_string(),
+            api_address: "node2:8002".to_string(),
         };
         // Node1 should have node3 as predecessor (node3 points to node1)
         *node1.predecessor.lock().unwrap() = Some(NodeInfo {
             id: node3_id,
             address: "node3:8003".to_string(),
+            api_address: "node3:8003".to_string(),
         });
 
         // Verify ring properties

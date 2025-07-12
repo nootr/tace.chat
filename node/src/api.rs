@@ -11,6 +11,8 @@ use hyper::{
 };
 use hyper_util::rt::TokioIo;
 use log::{debug, error, info};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -83,6 +85,24 @@ fn not_found() -> Response<Full<Bytes>> {
 fn ping_handler(_req: Request<impl Body>) -> Response<Full<Bytes>> {
     let response_body = json!({ "message": "pong" }).to_string();
     format_response(StatusCode::OK, response_body)
+}
+
+async fn connect_handler<T: NetworkClient>(
+    node: Arc<ChordNode<T>>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    // Generate a random key
+    let mut buf = [0u8; 20];
+    OsRng.fill_bytes(&mut buf);
+
+    let mut hasher = Sha1::new();
+    hasher.update(buf);
+    let key = hasher.finalize().into();
+
+    // Find the node responsible for this key
+    let responsible_node = node.find_successor(key).await;
+
+    let response_body = json!({ "node": responsible_node.api_address }).to_string();
+    Ok(format_response(StatusCode::OK, response_body))
 }
 
 async fn message_handler<T: NetworkClient>(
@@ -238,6 +258,7 @@ async fn handler<T: NetworkClient + Send + Sync + 'static>(
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/ping") => Ok(ping_handler(req)),
+        (&Method::GET, "/connect") => connect_handler(node).await,
         (&Method::POST, "/message") => message_handler(req, node).await,
         (&Method::GET, "/poll") => poll_handler(req, node).await,
         (&Method::OPTIONS, _) => {
@@ -247,7 +268,7 @@ async fn handler<T: NetworkClient + Send + Sync + 'static>(
                 hyper::header::HeaderValue::from_static("86400"),
             );
             Ok(response)
-        },
+        }
         _ => Ok(not_found()),
     }
 }
