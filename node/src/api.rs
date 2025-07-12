@@ -10,6 +10,7 @@ use hyper::{
     Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -91,7 +92,7 @@ async fn message_handler<T: NetworkClient>(
     let body_bytes = match req.collect().await {
         Ok(body) => body.to_bytes(),
         Err(e) => {
-            eprintln!("Error reading request body: {}", e);
+            error!("Error reading request body: {}", e);
             return Ok(format_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "Failed to read request body" }).to_string(),
@@ -102,7 +103,7 @@ async fn message_handler<T: NetworkClient>(
     let message_payload: MessagePayload = match serde_json::from_slice(&body_bytes) {
         Ok(payload) => payload,
         Err(e) => {
-            eprintln!("Failed to deserialize message payload: {}", e);
+            error!("Failed to deserialize message payload: {}", e);
             return Ok(format_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "Invalid JSON payload" }).to_string(),
@@ -110,7 +111,7 @@ async fn message_handler<T: NetworkClient>(
         }
     };
 
-    println!("Received message: {:?}", message_payload);
+    debug!("Received message: {:?}", message_payload);
 
     // Generate key from recipient's public key
     let key = generate_key(&message_payload.to);
@@ -147,12 +148,12 @@ async fn message_handler<T: NetworkClient>(
             )
             .await
         {
-            Ok(_) => println!(
+            Ok(_) => debug!(
                 "Message stored on node {}",
                 hex::encode(responsible_node.id)
             ),
             Err(e) => {
-                eprintln!("Failed to store message on remote node: {}", e);
+                error!("Failed to store message on remote node: {}", e);
                 return Ok(format_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({ "error": "Failed to store message" }).to_string(),
@@ -251,7 +252,7 @@ pub async fn run<T: NetworkClient + Send + Sync + 'static>(
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(addr).await?;
 
-    println!("API is listening on http://{}", addr);
+    info!("API is listening on http://{}", addr);
     loop {
         let (tcp, _) = listener.accept().await?;
         let io = TokioIo::new(tcp);
@@ -261,7 +262,7 @@ pub async fn run<T: NetworkClient + Send + Sync + 'static>(
                 .serve_connection(io, service_fn(move |req| handler(req, node_clone.clone())))
                 .await
             {
-                println!("Error serving connection: {:?}", err);
+                error!("Error serving connection: {:?}", err);
             }
         });
     }

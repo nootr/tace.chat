@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use log::{debug, error};
 use tace_lib::dht_messages::DhtMessage;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -22,17 +23,28 @@ impl NetworkClient for RealNetworkClient {
         address: &str,
         message: DhtMessage,
     ) -> Result<DhtMessage, Box<dyn std::error::Error>> {
-        let mut stream = TcpStream::connect(address).await?;
+        debug!("Attempting to connect to {}", address);
+        let mut stream = match TcpStream::connect(address).await {
+            Ok(stream) => {
+                debug!("Successfully connected to {}", address);
+                stream
+            }
+            Err(e) => {
+                error!("Failed to connect to {}: {}", address, e);
+                return Err(Box::new(e));
+            }
+        };
+
         let encoded = bincode::serialize(&message)?;
-        // In a real scenario, you might want to log this with the node's own address
-        // log_info!(address, "Sending message to {}: {:?}", address, message);
+        debug!("Sending message to {}: {:?}", address, message);
 
         stream.write_all(&encoded).await?;
+        stream.shutdown().await?; // Close the write side to signal we're done sending
 
         let mut buffer = Vec::new();
         stream.read_to_end(&mut buffer).await?;
         let response = bincode::deserialize(&buffer)?;
-        // log_info!(address, "Received response from {}: {:?}", address, response);
+        debug!("Received response from {}: {:?}", address, response);
 
         Ok(response)
     }

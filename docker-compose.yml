@@ -6,9 +6,77 @@ services:
     ports:
       - "8081:80"
 
-  node:
+  node1:
     build:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3000:3000"
+      - "3001:3000"
+      - "8001:8001"
+    environment:
+      - RUST_LOG=debug
+      - NODE_ADDRESS=node1:8001
+      - API_PORT=3000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3002:3000"
+      - "8002:8002"
+    environment:
+      - RUST_LOG=debug
+      - NODE_ADDRESS=node2:8002
+      - API_PORT=3000
+      - BOOTSTRAP_ADDRESS=node1:8001
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  node3:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3003:3000"
+      - "8003:8003"
+    environment:
+      - RUST_LOG=debug
+      - NODE_ADDRESS=node3:8003
+      - API_PORT=3000
+      - BOOTSTRAP_ADDRESS=node1:8001
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  node4:
+    build:
+      context: .
+      dockerfile: Dockerfile.node
+    ports:
+      - "3004:3000"
+      - "8004:8004"
+    environment:
+      - RUST_LOG=debug
+      - NODE_ADDRESS=node4:8004
+      - API_PORT=3000
+      - BOOTSTRAP_ADDRESS=node1:8001
+    depends_on:
+      node1:
+        condition: service_healthy

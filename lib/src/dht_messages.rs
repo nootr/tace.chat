@@ -57,4 +57,9 @@ pub enum DhtMessage {
     GetSuccessor,
     Ping,
     Pong,
+    // Network size estimation
+    GetNetworkEstimate,
+    NetworkEstimate {
+        estimate: f64,
+    },
 }

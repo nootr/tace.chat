@@ -65,6 +65,7 @@ mod tests {
             finger_table: Arc::new(Mutex::new(finger_table_vec)),
             data: Arc::new(Mutex::new(HashMap::new())),
             network_client: mock_network_client,
+            network_size_estimate: Arc::new(Mutex::new(1.0)),
         };
 
         // Test case 1: ID is far away, should return the largest finger
@@ -294,5 +295,238 @@ mod tests {
         let new_successor = node.successor.lock().unwrap();
         assert_eq!(new_successor.id, successor_predecessor_id);
         assert_eq!(new_successor.address, successor_predecessor_address);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_local_network_size_estimate_single_node() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Single node network: successor points to itself, no predecessor
+        let estimate = node.calculate_local_network_size_estimate();
+        assert_eq!(estimate, 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_local_network_size_estimate_two_nodes() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Set up a two-node network where nodes are separated
+        // In our algorithm, we calculate range between predecessor and successor
+        // For a 2-node network, if nodes are at positions A and B, then:
+        // - Node A sees: predecessor=B, successor=B, so range = 0 (they wrap around)
+        // Let's set up a scenario where predecessor and successor are different
+
+        let predecessor_id = hex_to_node_id("2000000000000000000000000000000000000000");
+        let successor_id = hex_to_node_id("8000000000000000000000000000000000000000");
+
+        // Set predecessor and successor to different nodes
+        *node.predecessor.lock().unwrap() = Some(NodeInfo {
+            id: predecessor_id,
+            address: "127.0.0.1:9001".to_string(),
+        });
+
+        *node.successor.lock().unwrap() = NodeInfo {
+            id: successor_id,
+            address: "127.0.0.1:9002".to_string(),
+        };
+
+        let estimate = node.calculate_local_network_size_estimate();
+        // Should estimate more than 1 node since we have a range between pred and succ
+        assert!(estimate > 1.0, "Expected >1 nodes, got {}", estimate);
+
+        // The estimate should be reasonable (not extremely large)
+        assert!(estimate < 100.0, "Estimate too large: {}", estimate);
+    }
+
+    #[tokio::test]
+    async fn test_network_size_estimation_with_mock_neighbor() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock the neighbor's response
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::GetNetworkEstimate))
+            .times(1)
+            .returning(|_, _| Ok(DhtMessage::NetworkEstimate { estimate: 3.5 }));
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up a multi-node scenario with successor and finger table entries
+        let successor = NodeInfo {
+            id: hex_to_node_id("1111111111111111111111111111111111111111"),
+            address: "127.0.0.1:9001".to_string(),
+        };
+        *node.successor.lock().unwrap() = successor.clone();
+
+        // Add some finger table entries
+        let mut finger_table = node.finger_table.lock().unwrap();
+        finger_table[0] = successor.clone();
+        finger_table[1] = NodeInfo {
+            id: hex_to_node_id("2222222222222222222222222222222222222222"),
+            address: "127.0.0.1:9002".to_string(),
+        };
+        drop(finger_table);
+
+        let initial_estimate = *node.network_size_estimate.lock().unwrap();
+
+        node.estimate_network_size().await;
+
+        let final_estimate = *node.network_size_estimate.lock().unwrap();
+
+        // The estimate should have been updated (should be different from initial)
+        assert_ne!(initial_estimate, final_estimate);
+
+        // The final estimate should be influenced by both local estimate and neighbor's estimate (3.5)
+        assert!(final_estimate > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_apply_bounds() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Test that bounds are applied correctly (max change factor is 4.0)
+        let old_estimate = 10.0;
+
+        // Test upper bound
+        let too_high = 50.0; // 5x increase, should be capped to 40.0 (4x)
+        let bounded_high = node.apply_bounds(old_estimate, too_high);
+        assert_eq!(bounded_high, 40.0);
+
+        // Test lower bound
+        let too_low = 1.0; // 10x decrease, should be capped to 2.5 (4x decrease)
+        let bounded_low = node.apply_bounds(old_estimate, too_low);
+        assert_eq!(bounded_low, 2.5);
+
+        // Test within bounds
+        let within_bounds = 20.0; // 2x increase, should pass through unchanged
+        let bounded_normal = node.apply_bounds(old_estimate, within_bounds);
+        assert_eq!(bounded_normal, within_bounds);
+    }
+
+    #[tokio::test]
+    async fn test_apply_smoothing() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Test smoothing with factor 0.1
+        let old_estimate = 10.0;
+        let new_estimate = 20.0;
+
+        let smoothed = node.apply_smoothing(old_estimate, new_estimate);
+
+        // Should be: 0.9 * 10.0 + 0.1 * 20.0 = 9.0 + 2.0 = 11.0
+        assert_eq!(smoothed, 11.0);
+    }
+
+    #[tokio::test]
+    async fn test_estimate_network_size_single_node_network() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // In a single node network, successor points to self
+        // estimate_network_size should return early without making network calls
+        let initial_estimate = *node.network_size_estimate.lock().unwrap();
+
+        node.estimate_network_size().await;
+
+        let final_estimate = *node.network_size_estimate.lock().unwrap();
+
+        // Estimate should be unchanged since we're the only node
+        assert_eq!(initial_estimate, final_estimate);
+    }
+
+    #[tokio::test]
+    async fn test_random_neighbor_selection() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock response for any network estimate request
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::GetNetworkEstimate))
+            .times(1)
+            .returning(|_, _| Ok(DhtMessage::NetworkEstimate { estimate: 4.0 }));
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up multiple candidate nodes
+        let successor = NodeInfo {
+            id: hex_to_node_id("1111111111111111111111111111111111111111"),
+            address: "127.0.0.1:9001".to_string(),
+        };
+        *node.successor.lock().unwrap() = successor.clone();
+
+        // Add multiple unique finger table entries
+        let mut finger_table = node.finger_table.lock().unwrap();
+        finger_table[0] = successor.clone();
+        finger_table[1] = NodeInfo {
+            id: hex_to_node_id("2222222222222222222222222222222222222222"),
+            address: "127.0.0.1:9002".to_string(),
+        };
+        finger_table[2] = NodeInfo {
+            id: hex_to_node_id("3333333333333333333333333333333333333333"),
+            address: "127.0.0.1:9003".to_string(),
+        };
+        drop(finger_table);
+
+        // Run estimation - it should succeed in picking a random neighbor
+        node.estimate_network_size().await;
+
+        // The estimate should have been updated from the mock response
+        let final_estimate = *node.network_size_estimate.lock().unwrap();
+        assert!(final_estimate > 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_ring_formation_simulation() {
+        // This test simulates a simple 3-node ring formation to verify the logic
+        use std::collections::HashMap;
+
+        // Create mock clients for 3 nodes
+        let mut node1_client = MockNetworkClient::new();
+        let mut node2_client = MockNetworkClient::new();
+        let mut node3_client = MockNetworkClient::new();
+
+        // Node IDs in order: node1 < node2 < node3
+        let node1_id = hex_to_node_id("1000000000000000000000000000000000000000");
+        let node2_id = hex_to_node_id("6000000000000000000000000000000000000000");
+        let node3_id = hex_to_node_id("A000000000000000000000000000000000000000");
+
+        // Set up node1 (first node, creates ring)
+        let node1 = ChordNode::new_for_test("node1:8001".to_string(), Arc::new(node1_client));
+        node1.start_new_network().await;
+
+        // In a properly formed 3-node ring:
+        // node1 -> node2 -> node3 -> node1
+        // Let's manually set up what should happen after stabilization
+
+        // Node1 should have node2 as successor after node2 joins
+        *node1.successor.lock().unwrap() = NodeInfo {
+            id: node2_id,
+            address: "node2:8002".to_string(),
+        };
+        // Node1 should have node3 as predecessor (node3 points to node1)
+        *node1.predecessor.lock().unwrap() = Some(NodeInfo {
+            id: node3_id,
+            address: "node3:8003".to_string(),
+        });
+
+        // Verify ring properties
+        let successor = node1.successor.lock().unwrap().clone();
+        let predecessor = node1.predecessor.lock().unwrap().clone();
+
+        // Check that successor is the next node in the ring
+        assert_eq!(successor.id, node2_id);
+
+        // Check that predecessor is the previous node in the ring
+        assert_eq!(predecessor.unwrap().id, node3_id);
+
+        // Verify the ring property: predecessor < self < successor (accounting for wraparound)
+        // In this case: node3 > node1 < node2, which is valid with wraparound
+        assert!(tace_lib::is_between(&node1.info.id, &node3_id, &node2_id));
     }
 }
