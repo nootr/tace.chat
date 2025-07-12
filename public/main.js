@@ -242,7 +242,7 @@ async function sendMessage() {
         };
 
         // 3. Send the message to the backend
-        const response = await fetch('http://localhost:3000/message', {
+        const response = await fetch('http://localhost:3001/message', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -336,7 +336,7 @@ async function pollMessages() {
     if (!state.keys || !state.keys.public_key) return;
 
     try {
-        const response = await fetch(`http://localhost:3000/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
+        const response = await fetch(`http://localhost:3001/poll?public_key=${encodeURIComponent(state.keys.public_key)}`, {
             method: 'GET',
             headers: {
                 'Content-Type': 'application/json',

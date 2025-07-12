@@ -66,7 +66,7 @@ fn format_response(status: StatusCode, body: impl Into<Bytes>) -> Response<Full<
     );
     response.headers_mut().insert(
         hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
-        hyper::header::HeaderValue::from_static("POST, OPTIONS"),
+        hyper::header::HeaderValue::from_static("GET, POST, OPTIONS"),
     );
     response
 }
@@ -80,7 +80,7 @@ fn not_found() -> Response<Full<Bytes>> {
     response
 }
 
-fn ping(_req: Request<impl Body>) -> Response<Full<Bytes>> {
+fn ping_handler(_req: Request<impl Body>) -> Response<Full<Bytes>> {
     let response_body = json!({ "message": "pong" }).to_string();
     format_response(StatusCode::OK, response_body)
 }
@@ -237,10 +237,17 @@ async fn handler<T: NetworkClient + Send + Sync + 'static>(
     node: Arc<ChordNode<T>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     match (req.method(), req.uri().path()) {
-        (&Method::GET, "/ping") => Ok(ping(req)),
+        (&Method::GET, "/ping") => Ok(ping_handler(req)),
         (&Method::POST, "/message") => message_handler(req, node).await,
         (&Method::GET, "/poll") => poll_handler(req, node).await,
-        (&Method::OPTIONS, _) => Ok(format_response(StatusCode::OK, "")),
+        (&Method::OPTIONS, _) => {
+            let mut response = format_response(StatusCode::OK, "");
+            response.headers_mut().insert(
+                hyper::header::ACCESS_CONTROL_MAX_AGE,
+                hyper::header::HeaderValue::from_static("86400"),
+            );
+            Ok(response)
+        },
         _ => Ok(not_found()),
     }
 }
