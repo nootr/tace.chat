@@ -213,6 +213,10 @@ impl<T: NetworkClient> ChordNode<T> {
                         let estimate = *self.network_size_estimate.lock().unwrap();
                         DhtMessage::NetworkEstimate { estimate }
                     }
+                    DhtMessage::GetDataRange { start, end } => {
+                        let data = self.get_data_range(start, end).await;
+                        DhtMessage::DataRange { data }
+                    }
                     _ => {
                         log_error!(
                             self.info.address,
@@ -264,6 +268,29 @@ impl<T: NetworkClient> ChordNode<T> {
         value
     }
 
+    // Retrieves all key-value pairs in a given range
+    pub async fn get_data_range(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<u8>)> {
+        let data = self.data.lock().unwrap();
+        let mut result = Vec::new();
+
+        for (key, value) in data.iter() {
+            // Check if key is in the range (start, end]
+            if tace_lib::is_between(key, &start, &end) || *key == end {
+                result.push((*key, value.clone()));
+            }
+        }
+
+        log_info!(
+            self.info.address,
+            "Retrieved {} keys in range ({}, {}]",
+            result.len(),
+            hex::encode(start),
+            hex::encode(end)
+        );
+
+        result
+    }
+
     pub async fn join(&self, bootstrap_address: Option<String>) {
         match bootstrap_address {
             Some(address) => {
@@ -283,18 +310,70 @@ impl<T: NetworkClient> ChordNode<T> {
                         address,
                         api_address,
                     }) => {
-                        let mut successor = self.successor.lock().unwrap();
-                        *successor = NodeInfo {
+                        let successor_info = NodeInfo {
                             id,
-                            address,
+                            address: address.clone(),
                             api_address,
                         };
+
+                        {
+                            let mut successor = self.successor.lock().unwrap();
+                            *successor = successor_info.clone();
+                            log_info!(
+                                self.info.address,
+                                "Joined network. Successor: {} at {}",
+                                hex::encode(successor.id),
+                                successor.address
+                            );
+                        }
+
+                        // Request data from successor that should belong to us
+                        // We are responsible for keys in range (predecessor.id, self.id]
+                        // Since we just joined, we need keys in range (self.id, successor.id]
                         log_info!(
                             self.info.address,
-                            "Joined network. Successor: {} at {}",
-                            hex::encode(successor.id),
-                            successor.address
+                            "Requesting data transfer from successor {}",
+                            successor_info.address
                         );
+
+                        match self
+                            .network_client
+                            .call_node(
+                                &successor_info.address,
+                                DhtMessage::GetDataRange {
+                                    start: self.info.id,
+                                    end: successor_info.id,
+                                },
+                            )
+                            .await
+                        {
+                            Ok(DhtMessage::DataRange { data }) => {
+                                if !data.is_empty() {
+                                    log_info!(
+                                        self.info.address,
+                                        "Received {} keys from successor",
+                                        data.len()
+                                    );
+                                    for (key, value) in data {
+                                        self.store(key, value).await;
+                                    }
+                                }
+                            }
+                            Ok(other) => {
+                                log_error!(
+                                    self.info.address,
+                                    "Unexpected response to GetDataRange: {:?}",
+                                    other
+                                );
+                            }
+                            Err(e) => {
+                                log_error!(
+                                    self.info.address,
+                                    "Failed to get data from successor: {}",
+                                    e
+                                );
+                            }
+                        }
                     }
                     Ok(other) => {
                         log_error!(
@@ -375,6 +454,8 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     // Finds the predecessor of an ID
+    // TODO: remove this method if not needed
+    #[allow(dead_code)]
     pub async fn find_predecessor(&self, id: NodeId) -> NodeInfo {
         let mut n_prime = self.info.clone();
         let mut current_successor = self.successor.lock().unwrap().clone();
@@ -568,55 +649,103 @@ impl<T: NetworkClient> ChordNode<T> {
             self.info.address, n_prime.address
         );
 
-        let mut predecessor = self.predecessor.lock().unwrap();
-        let current_pred = predecessor.clone();
+        let should_update;
+        let current_pred;
 
-        // If predecessor is nil or n_prime is between predecessor and self
-        let should_update = if predecessor.is_none() {
-            debug!(
-                "[{}] Notify: no current predecessor, accepting {}",
-                self.info.address, n_prime.address
-            );
-            true
-        } else {
-            let is_between = tace_lib::is_between(
-                &n_prime.id,
-                &predecessor.as_ref().unwrap().id,
-                &self.info.id,
-            );
-            debug!(
-                "[{}] Notify: current pred={}, candidate={}, is_between={}",
-                self.info.address,
-                predecessor.as_ref().unwrap().address,
-                n_prime.address,
-                is_between
-            );
-            is_between
-        };
+        // Scope for the lock to ensure it's dropped before async operations
+        {
+            let mut predecessor = self.predecessor.lock().unwrap();
+            current_pred = predecessor.clone();
 
-        if should_update {
-            debug!(
-                "[{}] Notify: updating predecessor from {:?} to {}",
-                self.info.address,
-                current_pred.as_ref().map(|p| &p.address),
-                n_prime.address
-            );
-            *predecessor = Some(n_prime.clone());
-
-            // Also check if we need to update successor in single-node case
-            let mut successor = self.successor.lock().unwrap();
-            if successor.id == self.info.id {
+            // If predecessor is nil or n_prime is between predecessor and self
+            should_update = if predecessor.is_none() {
                 debug!(
-                    "[{}] Notify: was single node, updating successor to {}",
+                    "[{}] Notify: no current predecessor, accepting {}",
                     self.info.address, n_prime.address
                 );
-                *successor = n_prime;
+                true
+            } else {
+                let is_between = tace_lib::is_between(
+                    &n_prime.id,
+                    &predecessor.as_ref().unwrap().id,
+                    &self.info.id,
+                );
+                debug!(
+                    "[{}] Notify: current pred={}, candidate={}, is_between={}",
+                    self.info.address,
+                    predecessor.as_ref().unwrap().address,
+                    n_prime.address,
+                    is_between
+                );
+                is_between
+            };
+
+            if should_update {
+                debug!(
+                    "[{}] Notify: updating predecessor from {:?} to {}",
+                    self.info.address,
+                    current_pred.as_ref().map(|p| &p.address),
+                    n_prime.address
+                );
+                *predecessor = Some(n_prime.clone());
+
+                // Also check if we need to update successor in single-node case
+                let mut successor = self.successor.lock().unwrap();
+                if successor.id == self.info.id {
+                    debug!(
+                        "[{}] Notify: was single node, updating successor to {}",
+                        self.info.address, n_prime.address
+                    );
+                    *successor = n_prime.clone();
+                }
+            }
+        } // Locks are dropped here
+
+        if should_update {
+            // Transfer data to the new predecessor
+            // The new predecessor (n_prime) should now be responsible for keys in range (n_prime.id, self.id]
+            let data_to_transfer = self.get_data_range(n_prime.id, self.info.id).await;
+
+            if !data_to_transfer.is_empty() {
+                log_info!(
+                    self.info.address,
+                    "Transferring {} keys to new predecessor {}",
+                    data_to_transfer.len(),
+                    n_prime.address
+                );
+
+                // Send each key-value pair to the new predecessor
+                for (key, value) in data_to_transfer {
+                    match self
+                        .network_client
+                        .call_node(&n_prime.address, DhtMessage::Store { key, value })
+                        .await
+                    {
+                        Ok(_) => {
+                            debug!(
+                                "[{}] Successfully transferred key {} to {}",
+                                self.info.address,
+                                hex::encode(key),
+                                n_prime.address
+                            );
+                        }
+                        Err(e) => {
+                            log_error!(
+                                self.info.address,
+                                "Failed to transfer key {} to {}: {}",
+                                hex::encode(key),
+                                n_prime.address,
+                                e
+                            );
+                        }
+                    }
+                }
             }
         } else {
             debug!(
-                "[{}] Notify: keeping current predecessor {}",
+                "[{}] Notify: keeping current predecessor {:?}",
                 self.info.address,
-                predecessor.as_ref().unwrap().address
+                current_pred.as_ref().map(|p| &p.address)
             );
         }
     }

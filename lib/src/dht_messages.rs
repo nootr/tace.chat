@@ -66,4 +66,13 @@ pub enum DhtMessage {
     NetworkEstimate {
         estimate: f64,
     },
+    // Request data in a key range (used when a node joins and needs data)
+    GetDataRange {
+        start: NodeId,
+        end: NodeId,
+    },
+    // Response with data in the requested range
+    DataRange {
+        data: Vec<(NodeId, Vec<u8>)>,
+    },
 }
