@@ -7,6 +7,15 @@ Running a `tace.chat` node is a lightweight and effective way to support the net
 - [Docker](https://www.docker.com/get-started) installed on your system.
 - A publicly accessible IP address or domain name.
 
+## System Requirements
+
+The `tace.chat` node is designed to be lightweight.
+
+-   **Memory**: 256MB of RAM is recommended. The node itself uses a small amount of memory, with a default 100MB in-memory queue for messages.
+-   **CPU**: A single CPU core is sufficient.
+-   **Disk Space**: Less than 200MB for the Docker image and log files.
+-   **Network**: A stable internet connection with a public IP address and open ports for P2P and API communication.
+
 ## Running a Standalone Node with Docker
 
 These instructions are for running a single, public-facing node that can join the main `tace.chat` network.
