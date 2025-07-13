@@ -58,6 +58,19 @@ document.addEventListener('alpine:init', () => {
             },
 
             // Methods
+            getPublicKeyColor(publicKey) {
+                if (!publicKey) {
+                    return '#ccc'; // Default color for placeholders
+                }
+                // Simple hash function to get a color from the public key
+                let hash = 0;
+                for (let i = 0; i < publicKey.length; i++) {
+                    hash = publicKey.charCodeAt(i) + ((hash << 5) - hash);
+                }
+                const c = (hash & 0x00FFFFFF).toString(16).toUpperCase();
+                return "#" + "00000".substring(0, 6 - c.length) + c;
+            },
+
             loadNodeUrl() {
                 fetch(`http://${this.node}/connect`)
                     .then(res => res.json())

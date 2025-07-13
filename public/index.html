@@ -10,10 +10,16 @@
     <script defer src="./alpine.js"></script>
 </head>
 <body x-data="app">
+    <template x-ref="profileIcon">
+        <svg viewBox="0 0 24 24" class="profile-pic">
+            <path fill="currentColor" d="M12,19.2C9.5,19.2 7.29,17.92 6,16C6.03,14 10,12.9 12,12.9C14,12.9 17.97,14 18,16C16.71,17.92 14.5,19.2 12,19.2M12,5A3,3 0 0,1 15,8A3,3 0 0,1 12,11A3,3 0 0,1 9,8A3,3 0 0,1 12,5M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"></path>
+        </svg>
+    </template>
+
     <div id="app-container">
         <div id="sidebar">
             <div class="header" id="sidebar-header">
-                <img src="#" alt="My Profile" class="profile-pic" id="my-profile-pic">
+                <div :style="{ backgroundColor: getPublicKeyColor(keys.public_key) }" class="profile-pic-container" x-html="$refs.profileIcon.innerHTML"></div>
                 <div class="header-icons">
                     <button @click="addContactModalOpen = true" title="Add Contact">
                         <svg viewBox="0 0 24 24" width="24" height="24">
@@ -33,7 +39,7 @@
             <div id="contact-list">
                 <template x-for="contact in filteredContacts" :key="contact.id">
                     <div :class="`contact ${contact.id === activeContactId ? 'active' : ''}`" @click="selectContact(contact.id)">
-                        <img src="#" alt="User" class="profile-pic">
+                        <div :style="{ backgroundColor: getPublicKeyColor(contact.publicKey) }" class="profile-pic-container" x-html="$refs.profileIcon.innerHTML"></div>
                         <div class="contact-details">
                             <div class="contact-name" x-text="contact.name"></div>
                             <div class="last-message" x-text="getLastMessage(contact.id)"></div>
@@ -46,7 +52,7 @@
         <div id="main-content">
             <template x-if="activeContact">
                 <div id="chat-header" class="header">
-                    <img src="#" alt="Profile" class="profile-pic">
+                    <div :style="{ backgroundColor: getPublicKeyColor(activeContact.publicKey) }" class="profile-pic-container" x-html="$refs.profileIcon.innerHTML"></div>
                     <div class="chat-info">
                         <div class="chat-name" x-text="activeContact.name"></div>
                         <div class="chat-status" x-show="activeContact.name.startsWith('Unknown (')">
@@ -65,7 +71,7 @@
             <div id="chat-window">
                 <template x-if="!activeContact">
                     <div class="no-chat-selected">
-                        <img src="#" alt="Tace Chat" class="logo-large">
+                        <div :style="{ backgroundColor: getPublicKeyColor(null) }" class="logo-large-container" x-html="$refs.profileIcon.innerHTML"></div>
                         <h1>Tace Chat</h1>
                         <p>Select a chat to start messaging.</p>
                     </div>
