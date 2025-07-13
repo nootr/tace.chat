@@ -2,6 +2,7 @@ use log::{debug, error, info};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use rand::seq::SliceRandom;
+use rand::Rng;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::env;
@@ -626,14 +627,14 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub async fn fix_fingers(&self) {
-        // Just acquire and release lock to test if that's the issue
-        {
-            let _finger_table = self.finger_table.lock().unwrap();
-        } // Lock released
+        // Pick a random finger to fix, to avoid all nodes fixing the same finger at the same time.
+        let i = rand::thread_rng().gen_range(1..M);
+        let target_id = tace_lib::add_id_power_of_2(&self.info.id, i);
+        let successor = self.find_successor(target_id).await;
 
-        // Now call find_successor
-        let target_id = tace_lib::add_id_power_of_2(&self.info.id, 0);
-        let _successor = self.find_successor(target_id).await;
+        // Update the finger table
+        let mut finger_table = self.finger_table.lock().unwrap();
+        finger_table[i] = successor;
     }
 
     pub async fn check_predecessor(&self) {
