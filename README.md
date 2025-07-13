@@ -37,7 +37,7 @@ The network grows stronger with each node. Running a node is lightweight and hel
 
 > _Your node helps others talk in peace._
 
-**[📚 Learn how to run a node →](#TBD)**
+**[📚 Learn how to run a node →](RUNNING_A_NODE.md)**
 
 ### Why run a node?
 
