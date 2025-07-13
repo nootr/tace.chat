@@ -5,19 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tace Chat</title>
     <link rel="stylesheet" href="styles.css">
+    <script type="module" src="./main.js"></script>
+    <script defer src="./alpine.persist.js"></script>
+    <script defer src="./alpine.js"></script>
 </head>
-<body>
+<body x-data="app">
     <div id="app-container">
         <div id="sidebar">
             <div class="header" id="sidebar-header">
                 <img src="#" alt="My Profile" class="profile-pic" id="my-profile-pic">
                 <div class="header-icons">
-                    <button id="add-contact-btn" title="Add Contact">
+                    <button @click="addContactModalOpen = true" title="Add Contact">
                         <svg viewBox="0 0 24 24" width="24" height="24">
                             <path fill="currentColor" d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"></path>
                         </svg>
                     </button>
-                    <button id="settings-btn" title="Settings">
+                    <button @click="settingsModalOpen = true" title="Settings">
                         <svg viewBox="0 0 24 24" width="24" height="24">
                             <path fill="currentColor" d="M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10M10,22C9.75,22 9.54,21.82 9.5,21.58L9.13,18.93C8.5,18.68 7.96,18.34 7.44,17.94L4.95,18.95C4.73,19.03 4.46,18.95 4.34,18.73L2.34,15.27C2.21,15.05 2.27,14.78 2.46,14.63L4.57,12.97L4.5,12L4.57,11L2.46,9.37C2.27,9.22 2.21,8.95 2.34,8.73L4.34,5.27C4.46,5.05 4.73,4.96 4.95,5.05L7.44,6.05C7.96,5.66 8.5,5.32 9.13,5.07L9.5,2.42C9.54,2.18 9.75,2 10,2H14C14.25,2 14.46,2.18 14.5,2.42L14.87,5.07C15.5,5.32 16.04,5.66 16.56,6.05L19.05,5.05C19.27,4.96 19.54,5.05 19.66,5.27L21.66,8.73C21.79,8.95 21.73,9.22 21.54,9.37L19.43,11L19.5,12L19.43,13L21.54,14.63C21.73,14.78 21.79,15.05 21.66,15.27L19.66,18.73C19.54,18.95 19.27,19.04 19.05,18.95L16.56,17.95C16.04,18.34 15.5,18.68 14.87,18.93L14.5,21.58C14.46,21.82 14.25,22 14,22H10Z"></path>
                         </svg>
@@ -25,27 +28,62 @@
                 </div>
             </div>
             <div class="search-bar">
-                <input type="text" id="search-contacts" placeholder="Search or start new chat">
+                <input type="text" placeholder="Search or start new chat" x-model="search">
             </div>
             <div id="contact-list">
-                <!-- Contacts will be dynamically inserted here -->
+                <template x-for="contact in filteredContacts" :key="contact.id">
+                    <div :class="`contact ${contact.id === activeContactId ? 'active' : ''}`" @click="selectContact(contact.id)">
+                        <img src="#" alt="User" class="profile-pic">
+                        <div class="contact-details">
+                            <div class="contact-name" x-text="contact.name"></div>
+                            <div class="last-message" x-text="getLastMessage(contact.id)"></div>
+                        </div>
+                        <span x-show="contact.name.startsWith('Unknown (')" class="unknown-badge">New</span>
+                    </div>
+                </template>
             </div>
         </div>
         <div id="main-content">
-            <div id="chat-header" class="header">
-                <!-- Active chat header will be dynamically inserted here -->
-            </div>
-            <div id="chat-window">
-                <!-- Messages will be dynamically inserted here -->
-                <div class="no-chat-selected">
-                    <img src="#" alt="Tace Chat" class="logo-large">
-                    <h1>Tace Chat</h1>
-                    <p>Select a chat to start messaging.</p>
+            <template x-if="activeContact">
+                <div id="chat-header" class="header">
+                    <img src="#" alt="Profile" class="profile-pic">
+                    <div class="chat-info">
+                        <div class="chat-name" x-text="activeContact.name"></div>
+                        <div class="chat-status" x-show="activeContact.name.startsWith('Unknown (')">
+                            Public key: <span x-text="`${activeContact.publicKey.substring(0, 16)}...`"></span>
+                        </div>
+                    </div>
+                    <div class="header-icons" x-show="activeContact.name.startsWith('Unknown (')">
+                        <button @click="renameContact(activeContact.id)" title="Rename Contact">
+                            <svg viewBox="0 0 24 24" width="20" height="20">
+                                <path fill="currentColor" d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"></path>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
+            </template>
+            <div id="chat-window">
+                <template x-if="!activeContact">
+                    <div class="no-chat-selected">
+                        <img src="#" alt="Tace Chat" class="logo-large">
+                        <h1>Tace Chat</h1>
+                        <p>Select a chat to start messaging.</p>
+                    </div>
+                </template>
+                <template x-if="activeContact">
+                    <template x-for="msg in messages[activeContactId] || []" :key="msg.id">
+                        <div :class="`message ${msg.sender === 'me' ? 'sent' : 'received'}`">
+                            <div class="message-content">
+                                <p x-text="decryptMessage(msg)"></p>
+                                <span class="timestamp" x-text="new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })"></span>
+                            </div>
+                        </div>
+                    </template>
+                </template>
             </div>
             <div id="message-input-container">
-                <input type="text" id="message-input" placeholder="Type a message" disabled>
-                <button id="send-btn" disabled>
+                <input type="text" id="message-input" placeholder="Type a message" x-model="newMessage" @keydown.enter="sendMessage" :disabled="!activeContact">
+                <button id="send-btn" @click="sendMessage" :disabled="!activeContact">
                     <svg viewBox="0 0 24 24" width="24" height="24">
                         <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
                     </svg>
@@ -55,33 +93,31 @@
     </div>
 
     <!-- Modals -->
-    <div id="settings-modal" class="modal-container" style="display: none;">
+    <div class="modal-container" x-show="settingsModalOpen" @click.self="settingsModalOpen = false" style="display: none;">
         <div class="modal-content">
-            <span class="close-btn">&times;</span>
+            <span class="close-btn" @click="settingsModalOpen = false">&times;</span>
             <h2>Settings</h2>
             <div class="setting-item">
                 <h3>Your Public Key</h3>
                 <p>Share this with your contacts so they can message you.</p>
-                <textarea id="user-public-key" readonly></textarea>
-                <button id="copy-public-key-btn">Copy Key</button>
+                <textarea x-ref="userPublicKey" readonly x-text="keys.public_key"></textarea>
+                <button @click="copyToClipboard($refs.userPublicKey)">Copy Key</button>
             </div>
         </div>
     </div>
 
-    <div id="add-contact-modal" class="modal-container" style="display: none;">
+    <div class="modal-container" x-show="addContactModalOpen" @click.self="addContactModalOpen = false" style="display: none;">
         <div class="modal-content">
-            <span class="close-btn">&times;</span>
+            <span class="close-btn" @click="addContactModalOpen = false">&times;</span>
             <h2>Add New Contact</h2>
-            <form id="add-contact-form">
+            <form @submit.prevent="addContact">
                 <label for="contact-name">Name:</label>
-                <input type="text" id="contact-name" required>
+                <input type="text" id="contact-name" x-model="newContact.name" required>
                 <label for="contact-public-key">Public Key:</label>
-                <textarea id="contact-public-key" required></textarea>
+                <textarea id="contact-public-key" x-model="newContact.publicKey" required></textarea>
                 <button type="submit">Save Contact</button>
             </form>
         </div>
     </div>
-
-    <script type="module" src="./main.js"></script>
 </body>
 </html>
