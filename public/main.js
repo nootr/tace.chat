@@ -1,6 +1,6 @@
 import init, { generate_keypair, encrypt, decrypt } from '../webclient/pkg/tace_webclient.js';
 
-const bootstrapNode = 'node1:3001';
+const bootstrapNode = '__BOOTSTRAP_NODE_URL__';
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('app', function () {

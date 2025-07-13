@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BOOTSTRAP_NODE_URL: node1:3001
     ports:
       - "8081:80"
 
