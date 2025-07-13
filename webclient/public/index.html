@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Tace Chat - A secure messaging app.">
+    <meta name="keywords" content="chat, messaging, secure, private, Tace Chat">
+    <meta name="author" content="Joris Hartog">
     <title>Tace Chat</title>
     <link rel="stylesheet" href="styles.css">
     <script type="module" src="./main.js"></script>
@@ -10,6 +13,10 @@
     <script defer src="./alpine.js"></script>
 </head>
 <body x-data="app">
+    <noscript>
+        ⚠️ JavaScript is required to use this site. Please enable JavaScript in your browser settings.
+    </noscript>
+
     <template x-ref="profileIcon">
         <svg viewBox="0 0 24 24" class="profile-pic">
             <path fill="currentColor" d="M12,19.2C9.5,19.2 7.29,17.92 6,16C6.03,14 10,12.9 12,12.9C14,12.9 17.97,14 18,16C16.71,17.92 14.5,19.2 12,19.2M12,5A3,3 0 0,1 15,8A3,3 0 0,1 12,11A3,3 0 0,1 9,8A3,3 0 0,1 12,5M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z"></path>
@@ -103,6 +110,10 @@
         <div class="modal-content">
             <span class="close-btn" @click="settingsModalOpen = false">&times;</span>
             <h2>Settings</h2>
+            <div class="setting-item">
+                <h3>Network information</h3>
+                <p>Current node connection: <span x-text="node"></span></p>
+            </div>
             <div class="setting-item">
                 <h3>Your Public Key</h3>
                 <p>Share this with your contacts so they can message you.</p>

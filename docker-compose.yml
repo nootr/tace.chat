@@ -2,7 +2,7 @@ services:
   webclient:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.webclient
       args:
         BOOTSTRAP_NODE_URL: node1:3001
     ports:
