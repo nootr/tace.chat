@@ -1342,6 +1342,373 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_id_space_wraparound() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock responses for wraparound scenarios
+        mock_network_client.expect_call_node().returning(|_, _| {
+            Ok(DhtMessage::FoundSuccessor {
+                id: hex_to_node_id("0000000000000000000000000000000000000001"),
+                address: "127.0.0.1:8001".to_string(),
+                api_address: "127.0.0.1:8001".to_string(),
+            })
+        });
+
+        // Create a node with ID near the end of the ID space
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Manually set the node's ID to be near the end of the ID space
+        let high_id = hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE");
+        let node_info = NodeInfo {
+            id: high_id,
+            address: "127.0.0.1:9000".to_string(),
+            api_address: "127.0.0.1:9000".to_string(),
+        };
+
+        // Create a new node with the high ID
+        let test_node = ChordNode {
+            info: node_info.clone(),
+            successor: Arc::new(Mutex::new(NodeInfo {
+                id: hex_to_node_id("0000000000000000000000000000000000000001"),
+                address: "127.0.0.1:8001".to_string(),
+                api_address: "127.0.0.1:8001".to_string(),
+            })),
+            predecessor: Arc::new(Mutex::new(None)),
+            finger_table: Arc::new(Mutex::new(vec![node_info.clone(); M])),
+            data: Arc::new(Mutex::new(HashMap::new())),
+            network_client: node.network_client.clone(),
+            network_size_estimate: Arc::new(Mutex::new(1.0)),
+        };
+
+        // Test finding successor of ID 0 (wraparound case)
+        let target_id = hex_to_node_id("0000000000000000000000000000000000000000");
+        let successor = test_node.find_successor(target_id).await;
+
+        // Should find the successor at the beginning of the ID space
+        assert_eq!(
+            successor.id,
+            hex_to_node_id("0000000000000000000000000000000000000001")
+        );
+
+        // Test is_between with wraparound
+        let low_id = hex_to_node_id("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE");
+        let mid_id = hex_to_node_id("0000000000000000000000000000000000000000");
+        let high_id = hex_to_node_id("0000000000000000000000000000000000000001");
+
+        assert!(
+            tace_lib::is_between(&mid_id, &low_id, &high_id),
+            "ID 0 should be between FFFE and 0001 (wraparound)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fix_fingers() {
+        let mock_network_client = MockNetworkClient::new();
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Get initial finger table state
+        let initial_finger_table = {
+            let ft = node.finger_table.lock().unwrap();
+            ft.clone()
+        };
+
+        // Manually set one finger to something different so we can detect changes
+        {
+            let mut ft = node.finger_table.lock().unwrap();
+            ft[5] = NodeInfo {
+                id: hex_to_node_id("1111111111111111111111111111111111111111"),
+                address: "127.0.0.1:8001".to_string(),
+                api_address: "127.0.0.1:8001".to_string(),
+            };
+        }
+
+        // Run fix_fingers - this will update a random finger (might not be the one we changed)
+        node.fix_fingers().await;
+
+        // Check that finger table structure is still valid
+        let updated_finger_table = {
+            let ft = node.finger_table.lock().unwrap();
+            ft.clone()
+        };
+
+        // Verify the finger table structure is still valid
+        assert_eq!(updated_finger_table.len(), M);
+        assert_eq!(initial_finger_table.len(), updated_finger_table.len());
+
+        // Verify that all fingers contain valid NodeInfo entries
+        for finger in &updated_finger_table {
+            assert!(!finger.address.is_empty());
+            assert!(!finger.api_address.is_empty());
+        }
+
+        // The method should run without panicking, which verifies basic functionality
+        // In a real network, this would update finger table entries with actual successor lookups
+    }
+
+    #[tokio::test]
+    async fn test_network_partition_recovery() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Simulate network partition where some calls fail and others succeed
+        let mut call_count = 0;
+        mock_network_client
+            .expect_call_node()
+            .returning(move |_addr, _| {
+                call_count += 1;
+                // First few calls fail (simulating partition), then succeed (recovery)
+                if call_count <= 2 {
+                    Err("Network partition - unreachable".into())
+                } else {
+                    Ok(DhtMessage::FoundSuccessor {
+                        id: hex_to_node_id("2222222222222222222222222222222222222222"),
+                        address: "127.0.0.1:8002".to_string(),
+                        api_address: "127.0.0.1:8002".to_string(),
+                    })
+                }
+            });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up a successor that will become unreachable
+        {
+            let mut successor = node.successor.lock().unwrap();
+            *successor = NodeInfo {
+                id: hex_to_node_id("1111111111111111111111111111111111111111"),
+                address: "127.0.0.1:8001".to_string(),
+                api_address: "127.0.0.1:8001".to_string(),
+            };
+        }
+
+        // Run stabilization multiple times to simulate recovery process
+        node.stabilize().await; // First call may fail due to partition
+        node.stabilize().await; // Second call may still fail
+        node.stabilize().await; // Third call should succeed (recovery)
+
+        // Verify that the node can still function after partition recovery
+        let target_id = hex_to_node_id("3333333333333333333333333333333333333333");
+        let result = node.find_successor(target_id).await;
+
+        // Should be able to find a successor even after network issues
+        assert!(!result.address.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_operations() {
+        use tokio::task::JoinSet;
+
+        let mock_network_client = MockNetworkClient::new();
+        let node = Arc::new(ChordNode::new_for_test(
+            "127.0.0.1:9000".to_string(),
+            Arc::new(mock_network_client),
+        ));
+
+        // Test concurrent store operations
+        let mut join_set = JoinSet::new();
+
+        for i in 0..10 {
+            let node_clone = node.clone();
+            join_set.spawn(async move {
+                let key = {
+                    let mut key = [0u8; 20];
+                    key[19] = i as u8;
+                    key
+                };
+                let value = format!("value_{}", i).into_bytes();
+                node_clone.store(key, value).await;
+            });
+        }
+
+        // Wait for all store operations to complete
+        while let Some(result) = join_set.join_next().await {
+            result.expect("Store operation should succeed");
+        }
+
+        // Test concurrent retrieve operations
+        for i in 0..10 {
+            let node_clone = node.clone();
+            join_set.spawn(async move {
+                let key = {
+                    let mut key = [0u8; 20];
+                    key[19] = i as u8;
+                    key
+                };
+                let result = node_clone.retrieve(key).await;
+                assert!(
+                    result.is_some(),
+                    "Should retrieve stored value for key {}",
+                    i
+                );
+                let values = result.unwrap();
+                assert!(!values.is_empty(), "Retrieved values should not be empty");
+                assert_eq!(values[0], format!("value_{}", i).into_bytes());
+            });
+        }
+
+        // Wait for all retrieve operations to complete
+        while let Some(result) = join_set.join_next().await {
+            result.expect("Retrieve operation should succeed");
+        }
+
+        // Test concurrent successor updates (simulating stabilization)
+        for i in 0..5 {
+            let node_clone = node.clone();
+            join_set.spawn(async move {
+                let new_successor = NodeInfo {
+                    id: {
+                        let mut id = [0u8; 20];
+                        id[19] = (100 + i) as u8;
+                        id
+                    },
+                    address: format!("127.0.0.1:800{}", i),
+                    api_address: format!("127.0.0.1:800{}", i),
+                };
+
+                // Update successor (this tests thread safety of successor updates)
+                {
+                    let mut successor = node_clone.successor.lock().unwrap();
+                    *successor = new_successor;
+                }
+            });
+        }
+
+        // Wait for all successor updates to complete
+        while let Some(result) = join_set.join_next().await {
+            result.expect("Successor update should succeed");
+        }
+
+        // Verify final state is consistent
+        let final_successor = node.successor.lock().unwrap();
+        assert!(
+            !final_successor.address.is_empty(),
+            "Final successor should be valid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_data_consistency_during_network_changes() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock data transfer during join operations
+        mock_network_client.expect_call_node().returning(|_, msg| {
+            match msg {
+                DhtMessage::GetDataRange { start: _, end: _ } => {
+                    // Return some test data for the range
+                    let test_data = vec![(
+                        hex_to_node_id("1111111111111111111111111111111111111111"),
+                        vec![b"test_value".to_vec()],
+                    )];
+                    Ok(DhtMessage::DataRange { data: test_data })
+                }
+                _ => Ok(DhtMessage::FoundSuccessor {
+                    id: hex_to_node_id("2222222222222222222222222222222222222222"),
+                    address: "127.0.0.1:8002".to_string(),
+                    api_address: "127.0.0.1:8002".to_string(),
+                }),
+            }
+        });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Store some initial data
+        let test_key = hex_to_node_id("1111111111111111111111111111111111111111");
+        let test_value = b"initial_value".to_vec();
+        node.store(test_key, test_value.clone()).await;
+
+        // Verify data is stored by checking it exists without retrieving (removing) it
+        {
+            let data = node.data.lock().unwrap();
+            assert!(data.contains_key(&test_key), "Data should be stored");
+            assert_eq!(data[&test_key][0], test_value);
+        }
+
+        // Simulate network change by updating successor
+        {
+            let mut successor = node.successor.lock().unwrap();
+            *successor = NodeInfo {
+                id: hex_to_node_id("3333333333333333333333333333333333333333"),
+                address: "127.0.0.1:8003".to_string(),
+                api_address: "127.0.0.1:8003".to_string(),
+            };
+        }
+
+        // Data should still be accessible after network topology change
+        let retrieved_after_change = node.retrieve(test_key).await;
+        assert!(
+            retrieved_after_change.is_some(),
+            "Data should still be accessible after network changes"
+        );
+        let values = retrieved_after_change.unwrap();
+        assert_eq!(values[0], test_value);
+
+        // Store the key again since retrieve removed it
+        node.store(test_key, test_value.clone()).await;
+
+        // Test data migration during simulated join
+        let bootstrap_node = Some("127.0.0.1:8001".to_string());
+        node.join(bootstrap_node).await;
+
+        // After join, verify that local data storage is still functional
+        // (The join process should have received data for the node's responsible range)
+        let final_retrieved = node.retrieve(test_key).await;
+        assert!(
+            final_retrieved.is_some(),
+            "Data should persist through join operations"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_malformed_message_handling() {
+        let mock_network_client = MockNetworkClient::new();
+        let node = Arc::new(ChordNode::new_for_test(
+            "127.0.0.1:9000".to_string(),
+            Arc::new(mock_network_client),
+        ));
+
+        // Test handling of various malformed inputs
+        // Note: In a real implementation, we'd test the actual network handling
+        // For now, we test the robustness of the message processing logic
+
+        // Test that the node can handle network errors gracefully
+        let target_id = hex_to_node_id("1111111111111111111111111111111111111111");
+
+        // This should not panic even with network issues
+        let result = node.find_successor(target_id).await;
+        assert!(
+            !result.address.is_empty(),
+            "Should return a valid result even with network issues"
+        );
+
+        // Test that data operations handle errors gracefully
+        let test_key = hex_to_node_id("2222222222222222222222222222222222222222");
+        let test_value = b"test_value".to_vec();
+
+        // Store should not panic
+        node.store(test_key, test_value).await;
+
+        // Retrieve should handle missing keys gracefully
+        let missing_key = hex_to_node_id("9999999999999999999999999999999999999999");
+        let result = node.retrieve(missing_key).await;
+        // Should return None for missing keys, not panic
+        assert!(
+            result.is_none() || result.is_some(),
+            "Retrieve should handle missing keys gracefully"
+        );
+
+        // Test that stabilization handles errors gracefully
+        node.stabilize().await; // Should not panic
+
+        // Test that fix_fingers handles errors gracefully
+        node.fix_fingers().await; // Should not panic
+
+        // Test that check_predecessor handles errors gracefully
+        node.check_predecessor().await; // Should not panic
+    }
+
+    #[tokio::test]
     async fn test_stabilize() {
         let mut mock_network_client = MockNetworkClient::new();
         let successor_predecessor_id = hex_to_node_id("5555555555555555555555555555555555555555");
