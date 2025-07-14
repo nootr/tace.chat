@@ -90,19 +90,54 @@ fn ping_handler(_req: Request<impl Body>) -> Response<Full<Bytes>> {
 async fn connect_handler<T: NetworkClient>(
     node: Arc<ChordNode<T>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    // Generate a random key
-    let mut buf = [0u8; 20];
-    OsRng.fill_bytes(&mut buf);
+    const MAX_ATTEMPTS: u8 = 10;
+    for _ in 0..MAX_ATTEMPTS {
+        // Generate a random key
+        let mut buf = [0u8; 20];
+        OsRng.fill_bytes(&mut buf);
 
-    let mut hasher = Sha1::new();
-    hasher.update(buf);
-    let key = hasher.finalize().into();
+        let mut hasher = Sha1::new();
+        hasher.update(buf);
+        let key = hasher.finalize().into();
 
-    // Find the node responsible for this key
-    let responsible_node = node.find_successor(key).await;
+        // Find the node responsible for this key
+        let responsible_node = node.find_successor(key).await;
 
-    let response_body = json!({ "node": responsible_node.api_address }).to_string();
-    Ok(format_response(StatusCode::OK, response_body))
+        // If it's ourself, we are reachable
+        if responsible_node.id == node.info.id {
+            let response_body = json!({ "node": responsible_node.api_address }).to_string();
+            return Ok(format_response(StatusCode::OK, response_body));
+        }
+
+        // Ping the node to check if it's alive
+        match node
+            .network_client
+            .call_node(&responsible_node.address, DhtMessage::Ping)
+            .await
+        {
+            Ok(DhtMessage::Pong) => {
+                // Node is alive, return its address
+                let response_body = json!({ "node": responsible_node.api_address }).to_string();
+                return Ok(format_response(StatusCode::OK, response_body));
+            }
+            _ => {
+                // Node is not reachable, try another one
+                debug!(
+                    "Node {} at {} is not reachable, trying another one.",
+                    hex::encode(responsible_node.id),
+                    responsible_node.address
+                );
+                continue;
+            }
+        }
+    }
+
+    // If we reach here, we failed to find a reachable node
+    error!("Failed to find a reachable node after {} attempts.", MAX_ATTEMPTS);
+    Ok(format_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({ "error": "Could not find a reachable node in the network" }).to_string(),
+    ))
 }
 
 async fn message_handler<T: NetworkClient>(

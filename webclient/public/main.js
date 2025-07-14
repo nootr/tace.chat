@@ -22,7 +22,7 @@ document.addEventListener('alpine:init', () => {
             // Init
             async init() {
                 await init(); // Initialize WASM
-                this.loadNodeUrl();
+                await this.loadNodeUrl();
                 if (!this.keys.private_key || !this.keys.public_key) {
                     console.log('No keys found, generating new ones...');
                     const keypair = generate_keypair();
@@ -71,16 +71,52 @@ document.addEventListener('alpine:init', () => {
                 return "#" + "00000".substring(0, 6 - c.length) + c;
             },
 
-            loadNodeUrl() {
-                fetch(`http://${this.node}/connect`)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data && data.node) {
-                            this.node = data.node;
-                            console.log('Connected to node:', this.node);
-                        }
-                    })
-                    .catch(err => console.error('Error fetching node URL:', err));
+            async apiRequest(path, options = {}, retries = 1) {
+                const url = `http://${this.node}${path}`;
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error(`API request to ${url} failed:`, error);
+                    if (retries > 0) {
+                        console.log('Attempting to fetch a new node and retry...');
+                        await this.fetchNewNode();
+                        return this.apiRequest(path, options, retries - 1);
+                    } else {
+                        console.error('API request failed after multiple retries.');
+                        throw error; // Re-throw the error after retries are exhausted
+                    }
+                }
+            },
+
+            async fetchNewNode() {
+                console.log('Fetching a new node from bootstrap:', bootstrapNode);
+                try {
+                    const response = await fetch(`http://${bootstrapNode}/connect`);
+                    const data = await response.json();
+                    if (data && data.node) {
+                        this.node = data.node;
+                        console.log('Switched to new node:', this.node);
+                    }
+                } catch (err) {
+                    console.error('Failed to fetch a new node from bootstrap:', err);
+                    // If bootstrap fails, we keep the current node and let the retry logic handle it.
+                }
+            },
+
+            async loadNodeUrl() {
+                try {
+                    const data = await this.apiRequest('/connect');
+                    if (data && data.node) {
+                        this.node = data.node;
+                        console.log('Connected to node:', this.node);
+                    }
+                } catch (err) {
+                    console.error('Error fetching node URL:', err);
+                }
             },
 
             selectContact(contactId) {
@@ -100,13 +136,11 @@ document.addEventListener('alpine:init', () => {
                         nonce: Array.from(encrypted.nonce),
                     };
 
-                    const response = await fetch(`http://${this.node}/message`, {
+                    await this.apiRequest('/message', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(payload),
                     });
-
-                    if (!response.ok) throw new Error('Failed to send message');
 
                     const message = {
                         id: Date.now(),
@@ -123,7 +157,7 @@ document.addEventListener('alpine:init', () => {
                     this.newMessage = '';
                 } catch (e) {
                     console.error("Failed to send message:", e);
-                    alert("Failed to send message.");
+                    alert("Failed to send message. The node might be offline.");
                 }
             },
 
@@ -178,6 +212,8 @@ document.addEventListener('alpine:init', () => {
                 navigator.clipboard.writeText(element.value);
             },
 
+
+
             startPolling() {
                 this.pollMessages();
                 setInterval(() => this.pollMessages(), 5000);
@@ -186,9 +222,7 @@ document.addEventListener('alpine:init', () => {
             async pollMessages() {
                 if (!this.keys.public_key) return;
                 try {
-                    const response = await fetch(`http://${this.node}/poll?public_key=${encodeURIComponent(this.keys.public_key)}`);
-                    if (!response.ok) return;
-                    const data = await response.json();
+                    const data = await this.apiRequest(`/poll?public_key=${encodeURIComponent(this.keys.public_key)}`);
 
                     if (data.messages && data.messages.length > 0) {
                         data.messages.forEach(msg => {
