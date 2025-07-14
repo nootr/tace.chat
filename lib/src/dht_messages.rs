@@ -19,6 +19,16 @@ pub enum DhtMessage {
         address: String,
         api_address: String,
     },
+    // Message to find the predecessor of a given ID
+    FindPredecessor {
+        id: NodeId,
+    },
+    // Response to FindPredecessor
+    FoundPredecessor {
+        id: NodeId,
+        address: String,
+        api_address: String,
+    },
     // Notify a node that we believe we are its predecessor
     Notify {
         id: NodeId,

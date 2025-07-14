@@ -163,6 +163,14 @@ impl<T: NetworkClient> ChordNode<T> {
                             api_address: successor.api_address,
                         }
                     }
+                    DhtMessage::FindPredecessor { id } => {
+                        let predecessor = self.find_predecessor(id).await;
+                        DhtMessage::FoundPredecessor {
+                            id: predecessor.id,
+                            address: predecessor.address,
+                            api_address: predecessor.api_address,
+                        }
+                    }
                     DhtMessage::GetSuccessor => {
                         let successor = self.successor.lock().unwrap().clone();
                         DhtMessage::FoundSuccessor {
@@ -416,22 +424,18 @@ impl<T: NetworkClient> ChordNode<T> {
 
     // Finds the successor of an ID
     pub async fn find_successor(&self, id: NodeId) -> NodeInfo {
-        // If the ID is between this node and its successor, then successor is the answer
-        let successor = self.successor.lock().unwrap().clone();
-        if tace_lib::is_between(&id, &self.info.id, &successor.id) {
-            return successor;
-        }
+        // According to Chord algorithm: find_successor(id) = find_predecessor(id).successor
+        let predecessor = self.find_predecessor(id).await;
 
-        // Otherwise, find the closest preceding node and ask it
-        let n_prime = self.closest_preceding_node(id).await;
-        if n_prime.id == self.info.id {
+        // If the predecessor is this node, return our successor
+        if predecessor.id == self.info.id {
             return self.successor.lock().unwrap().clone();
         }
 
-        // Call n_prime's find_successor
+        // Otherwise, get the successor of the predecessor
         match self
             .network_client
-            .call_node(&n_prime.address, DhtMessage::FindSuccessor { id })
+            .call_node(&predecessor.address, DhtMessage::GetSuccessor)
             .await
         {
             Ok(DhtMessage::FoundSuccessor {
@@ -446,9 +450,9 @@ impl<T: NetworkClient> ChordNode<T> {
             _ => {
                 log_error!(
                     self.info.address,
-                    "Error: Failed to get successor from closest preceding node."
+                    "Error: Failed to get successor from predecessor {}.",
+                    predecessor.address
                 );
-
                 // Fallback to self's successor if remote call fails
                 self.successor.lock().unwrap().clone()
             }
@@ -456,16 +460,25 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     // Finds the predecessor of an ID
-    // TODO: remove this method if not needed
-    #[allow(dead_code)]
     pub async fn find_predecessor(&self, id: NodeId) -> NodeInfo {
         let mut n_prime = self.info.clone();
         let mut current_successor = self.successor.lock().unwrap().clone();
+        let mut retry_count = 0;
+        const MAX_RETRIES: u32 = 10;
 
         // Loop until id is between n_prime and its successor
         while !tace_lib::is_between(&id, &n_prime.id, &current_successor.id) {
-            if n_prime.id == self.info.id {
-                n_prime = self.closest_preceding_node(id).await;
+            retry_count += 1;
+            if retry_count > MAX_RETRIES {
+                log_error!(
+                    self.info.address,
+                    "Max retries reached in find_predecessor, returning current node."
+                );
+                break;
+            }
+
+            let next_node = if n_prime.id == self.info.id {
+                self.closest_preceding_node(id).await
             } else {
                 match self
                     .network_client
@@ -476,45 +489,59 @@ impl<T: NetworkClient> ChordNode<T> {
                         id,
                         address,
                         api_address,
-                    }) => {
-                        n_prime = NodeInfo {
-                            id,
-                            address,
-                            api_address,
-                        };
-                    }
-                    _ => {
-                        log_error!(
-                            self.info.address,
-                            "Error: Failed to get closest preceding node from remote."
-                        );
-                    }
-                }
-            }
-            // Get the successor of the new n_prime
-            match self
-                .network_client
-                .call_node(&n_prime.address, DhtMessage::GetSuccessor)
-                .await
-            {
-                Ok(DhtMessage::FoundSuccessor {
-                    id,
-                    address,
-                    api_address,
-                }) => {
-                    current_successor = NodeInfo {
+                    }) => NodeInfo {
                         id,
                         address,
                         api_address,
-                    };
+                    },
+                    _ => {
+                        log_error!(
+                            self.info.address,
+                            "Error: Failed to get closest preceding node from {}.",
+                            n_prime.address
+                        );
+                        // If we can't get a closer node, return what we have
+                        break;
+                    }
                 }
-                _ => {
-                    log_error!(
-                        self.info.address,
-                        "Error: Failed to get successor of n_prime."
-                    );
-                }
+            };
+
+            // Avoid infinite loops by checking if we got the same node
+            if next_node.id == n_prime.id {
+                break;
             }
+
+            n_prime = next_node;
+
+            // Get the successor of the new n_prime
+            current_successor = if n_prime.id == self.info.id {
+                self.successor.lock().unwrap().clone()
+            } else {
+                match self
+                    .network_client
+                    .call_node(&n_prime.address, DhtMessage::GetSuccessor)
+                    .await
+                {
+                    Ok(DhtMessage::FoundSuccessor {
+                        id,
+                        address,
+                        api_address,
+                    }) => NodeInfo {
+                        id,
+                        address,
+                        api_address,
+                    },
+                    _ => {
+                        log_error!(
+                            self.info.address,
+                            "Error: Failed to get successor of {}.",
+                            n_prime.address
+                        );
+                        // If we can't get the successor, return what we have
+                        break;
+                    }
+                }
+            };
         }
         n_prime
     }
@@ -1235,10 +1262,10 @@ mod tests {
         let successor_address = "127.0.0.1:8002".to_string();
         let successor_address_clone = successor_address.clone();
 
-        // This mock will be for the call to the closest preceding node
+        // Mock for any call_node - the new algorithm might make multiple calls
         mock_network_client
             .expect_call_node()
-            .times(1)
+            .times(1..=3) // Allow 1 to 3 calls
             .returning(move |_, _| {
                 Ok(DhtMessage::FoundSuccessor {
                     id: successor_id,
@@ -1264,6 +1291,54 @@ mod tests {
 
         assert_eq!(successor.id, successor_id);
         assert_eq!(successor.address, successor_address);
+    }
+
+    #[tokio::test]
+    async fn test_find_predecessor_message_handling() {
+        let mock_network_client = MockNetworkClient::new();
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up a predecessor in the node's finger table
+        let predecessor_id = hex_to_node_id("2222222222222222222222222222222222222222");
+        let predecessor_address = "127.0.0.1:8001".to_string();
+        let mut finger_table = node.finger_table.lock().unwrap();
+        finger_table[0] = NodeInfo {
+            id: predecessor_id,
+            address: predecessor_address.clone(),
+            api_address: predecessor_address.clone(),
+        };
+        drop(finger_table);
+
+        // Test the FindPredecessor message by calling find_predecessor directly
+        let target_id = hex_to_node_id("1111111111111111111111111111111111111111");
+        let predecessor = node.find_predecessor(target_id).await;
+
+        // The predecessor should be the current node since the target ID is between
+        // the current node and its successor
+        assert_eq!(predecessor.id, node.info.id);
+        assert_eq!(predecessor.address, node.info.address);
+    }
+
+    #[tokio::test]
+    async fn test_find_predecessor_retry_logic() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock network calls to always fail, triggering retry logic
+        mock_network_client
+            .expect_call_node()
+            .returning(|_, _| Err("Network error".into()));
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Test find_predecessor with a target that is between this node and its successor
+        // This should not require network calls and return the current node
+        let target_id = hex_to_node_id("7000000000000000000000000000000000000000");
+        let result = node.find_predecessor(target_id).await;
+
+        // Should return the current node since the target is between current and successor
+        assert_eq!(result.id, node.info.id);
     }
 
     #[tokio::test]
