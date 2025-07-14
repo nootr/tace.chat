@@ -233,17 +233,21 @@ async fn poll_handler<T: NetworkClient>(
         }
     };
 
-    let messages = if let Some(data) = messages_data {
-        // Deserialize the stored message
-        match bincode::deserialize::<StoredMessage>(&data) {
-            Ok(stored_msg) => vec![PollMessage {
-                from: stored_msg.from,
-                ciphertext: stored_msg.ciphertext,
-                nonce: stored_msg.nonce,
-                timestamp: stored_msg.timestamp,
-            }],
-            Err(_) => vec![],
-        }
+    let messages = if let Some(data_vec) = messages_data {
+        // Deserialize the stored messages
+        data_vec
+            .into_iter()
+            .filter_map(|data| {
+                bincode::deserialize::<StoredMessage>(&data)
+                    .map(|stored_msg| PollMessage {
+                        from: stored_msg.from,
+                        ciphertext: stored_msg.ciphertext,
+                        nonce: stored_msg.nonce,
+                        timestamp: stored_msg.timestamp,
+                    })
+                    .ok()
+            })
+            .collect()
     } else {
         vec![]
     };

@@ -79,9 +79,11 @@ For full terms, see the [LICENSE](LICENSE).
 
 ### Data Collection
 
-tace.chat does **not collect or store any personal information**.
+tace.chat does **not collect or store personal information**.
 
-Anonymous usage metrics (e.g. node uptime, message throughput) may be shared between peers using a decentralized gossip protocol. This data is ephemeral and not tied to user identities.
+To enable encrypted message delivery, nodes may temporarily process client public keys. (TODO: remove when hashed keys are implemented)
+
+Anonymous usage metrics (e.g. node uptime, message throughput) may be shared via a decentralized gossip protocol. This data is ephemeral and never linked to users.
 
 We do not log, track, or store IP addresses, account information, or message content.
 

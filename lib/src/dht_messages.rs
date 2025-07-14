@@ -45,7 +45,7 @@ pub enum DhtMessage {
     // Response with a retrieved value
     Retrieved {
         key: NodeId,
-        value: Option<Vec<u8>>,
+        value: Option<Vec<Vec<u8>>>,
     },
     // Request for the closest preceding node
     ClosestPrecedingNode {
@@ -73,6 +73,6 @@ pub enum DhtMessage {
     },
     // Response with data in the requested range
     DataRange {
-        data: Vec<(NodeId, Vec<u8>)>,
+        data: Vec<(NodeId, Vec<Vec<u8>>)>,
     },
 }

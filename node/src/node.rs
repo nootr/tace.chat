@@ -39,7 +39,7 @@ pub struct ChordNode<T: NetworkClient> {
     pub successor: Arc<Mutex<NodeInfo>>,
     pub predecessor: Arc<Mutex<Option<NodeInfo>>>,
     pub finger_table: Arc<Mutex<Vec<NodeInfo>>>,
-    pub data: Arc<Mutex<HashMap<NodeId, Vec<u8>>>>,
+    pub data: Arc<Mutex<HashMap<NodeId, Vec<Vec<u8>>>>>,
     pub network_client: Arc<T>,
     pub network_size_estimate: Arc<Mutex<f64>>,
 }
@@ -252,14 +252,15 @@ impl<T: NetworkClient> ChordNode<T> {
     // Stores a key-value pair in the DHT
     pub async fn store(&self, key: NodeId, value: Vec<u8>) {
         let mut data = self.data.lock().unwrap();
-        data.insert(key, value);
+        let values = data.entry(key).or_default();
+        values.push(value);
         log_info!(self.info.address, "Stored key: {}", hex::encode(key));
     }
 
     // Retrieves a value by key from the DHT
-    pub async fn retrieve(&self, key: NodeId) -> Option<Vec<u8>> {
-        let data = self.data.lock().unwrap();
-        let value = data.get(&key).cloned();
+    pub async fn retrieve(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
+        let mut data = self.data.lock().unwrap();
+        let value = data.remove(&key);
         if value.is_some() {
             log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
         } else {
@@ -269,7 +270,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     // Retrieves all key-value pairs in a given range
-    pub async fn get_data_range(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<u8>)> {
+    pub async fn get_data_range(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<Vec<u8>>)> {
         let data = self.data.lock().unwrap();
         let mut result = Vec::new();
 
@@ -354,8 +355,10 @@ impl<T: NetworkClient> ChordNode<T> {
                                         "Received {} keys from successor",
                                         data.len()
                                     );
-                                    for (key, value) in data {
-                                        self.store(key, value).await;
+                                    for (key, values) in data {
+                                        for value in values {
+                                            self.store(key, value).await;
+                                        }
                                     }
                                 }
                             }
@@ -715,28 +718,36 @@ impl<T: NetworkClient> ChordNode<T> {
                 );
 
                 // Send each key-value pair to the new predecessor
-                for (key, value) in data_to_transfer {
-                    match self
-                        .network_client
-                        .call_node(&n_prime.address, DhtMessage::Store { key, value })
-                        .await
-                    {
-                        Ok(_) => {
-                            debug!(
-                                "[{}] Successfully transferred key {} to {}",
-                                self.info.address,
-                                hex::encode(key),
-                                n_prime.address
-                            );
-                        }
-                        Err(e) => {
-                            log_error!(
-                                self.info.address,
-                                "Failed to transfer key {} to {}: {}",
-                                hex::encode(key),
-                                n_prime.address,
-                                e
-                            );
+                for (key, values) in data_to_transfer {
+                    for value in values {
+                        match self
+                            .network_client
+                            .call_node(
+                                &n_prime.address,
+                                DhtMessage::Store {
+                                    key,
+                                    value: value.clone(),
+                                },
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                debug!(
+                                    "[{}] Successfully transferred key {} to {}",
+                                    self.info.address,
+                                    hex::encode(key),
+                                    n_prime.address
+                                );
+                            }
+                            Err(e) => {
+                                log_error!(
+                                    self.info.address,
+                                    "Failed to transfer key {} to {}: {}",
+                                    hex::encode(key),
+                                    n_prime.address,
+                                    e
+                                );
+                            }
                         }
                     }
                 }
@@ -1054,7 +1065,7 @@ mod tests {
 
         // Retrieve the value
         let retrieved_value = node.retrieve(key).await;
-        assert_eq!(retrieved_value, Some(value));
+        assert_eq!(retrieved_value, Some(vec![value]));
 
         // Try to retrieve a non-existent key
         let non_existent_key = hex_to_node_id("0000000000000000000000000000000000000000");
@@ -1156,16 +1167,37 @@ mod tests {
                 address == bootstrap_node_address
                     && match message {
                         DhtMessage::FindSuccessor { id: _ } => true,
+                        DhtMessage::GetDataRange { start: _, end: _ } => true,
                         _ => false,
                     }
             })
-            .times(1)
-            .returning(move |_, _| {
-                Ok(DhtMessage::FoundSuccessor {
+            .times(2)
+            .returning(move |_, message| match message {
+                DhtMessage::FindSuccessor { id: _ } => Ok(DhtMessage::FoundSuccessor {
                     id: bootstrap_node_id,
                     address: "127.0.0.1:8001".to_string(),
                     api_address: "127.0.0.1:8001".to_string(),
-                })
+                }),
+                DhtMessage::GetDataRange { start, end } => {
+                    assert_eq!(
+                        start,
+                        hex_to_node_id("70bacfa8e44a0929dddd31d0b9d78164e8cbfba5")
+                    );
+                    assert_eq!(end, bootstrap_node_id);
+                    Ok(DhtMessage::DataRange {
+                        data: vec![
+                            (
+                                hex_to_node_id("1234567890123456789012345678901234567890"),
+                                vec![vec![1, 2, 3], vec![4, 5, 6]],
+                            ),
+                            (
+                                hex_to_node_id("1234567890123456789012345678901234567891"),
+                                vec![vec![4, 5, 6]],
+                            ),
+                        ],
+                    })
+                }
+                _ => Err("Unexpected message".into()),
             });
 
         let node =
@@ -1175,6 +1207,14 @@ mod tests {
         let successor = node.successor.lock().unwrap();
         assert_eq!(successor.id, bootstrap_node_id);
         assert_eq!(successor.address, "127.0.0.1:8001");
+        let data = node.data.lock().unwrap();
+        assert_eq!(data.len(), 2);
+        assert_eq!(
+            data.get(&hex_to_node_id("1234567890123456789012345678901234567890"))
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
