@@ -34,6 +34,7 @@ document.addEventListener('alpine:init', () => {
             search: '',
             newMessage: '',
             newContact: { name: '', publicKey: '' },
+            isPolling: false,
 
             // Init
             async init() {
@@ -241,7 +242,9 @@ document.addEventListener('alpine:init', () => {
             },
 
             async pollMessages() {
-                if (!this.keys.public_key) return;
+                if (!this.keys.public_key || this.isPolling) return;
+
+                this.isPolling = true;
                 try {
                     // 1. Get challenge
                     const challengeData = await this.apiRequest(`/poll/challenge?public_key=${encodeURIComponent(this.keys.public_key)}`);
@@ -309,6 +312,8 @@ document.addEventListener('alpine:init', () => {
                     }
                 } catch (e) {
                     console.error('Error polling messages:', e.message);
+                } finally {
+                    this.isPolling = false;
                 }
             }
         }
