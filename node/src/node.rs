@@ -769,6 +769,14 @@ impl<T: NetworkClient> ChordNode<T> {
         // Update the finger table
         let mut finger_table = self.finger_table.lock().unwrap();
         finger_table[i] = successor;
+        debug!(
+            "[{}] Fingers: {:?}",
+            self.info.address,
+            finger_table
+                .iter()
+                .map(|f| f.address.clone())
+                .collect::<Vec<_>>()
+        );
     }
 
     pub async fn check_predecessor(&self) {
@@ -787,6 +795,10 @@ impl<T: NetworkClient> ChordNode<T> {
                     // Predecessor is dead, clear it
                     let mut p = self.predecessor.lock().unwrap();
                     *p = None;
+                    debug!(
+                        "[{}] Predecessor {} is dead, clearing predecessor",
+                        self.info.address, predecessor.address
+                    );
                 }
             }
         }

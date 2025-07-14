@@ -21,6 +21,7 @@ services:
       - IS_BOOTSTRAP=true
       - NODE_PORT=6512
       - API_PORT=6345
+      - STABILIZATION_INTERVAL=1
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6345/ping"]
       interval: 5s
@@ -40,6 +41,7 @@ services:
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6513
       - API_PORT=6346
+      - STABILIZATION_INTERVAL=1
     depends_on:
       node1:
         condition: service_healthy
@@ -62,6 +64,7 @@ services:
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6514
       - API_PORT=6347
+      - STABILIZATION_INTERVAL=1
     depends_on:
       node1:
         condition: service_healthy
@@ -84,6 +87,7 @@ services:
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6515
       - API_PORT=6348
+      - STABILIZATION_INTERVAL=1
     depends_on:
       node1:
         condition: service_healthy

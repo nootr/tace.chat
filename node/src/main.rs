@@ -34,6 +34,10 @@ async fn main() {
             _ => "bootstrap.tace.chat:6512".to_string(),
         })
     };
+    let stabilization_interval: u64 = env::var("STABILIZATION_INTERVAL")
+        .unwrap_or_else(|_| "5".to_string())
+        .parse()
+        .expect("STABILIZATION_INTERVAL must be a valid integer");
 
     let bind_address = format!("{}:{}", bind_host, node_port);
     let advertise_address = format!("{}:{}", advertise_host, node_port);
@@ -64,7 +68,7 @@ async fn main() {
                 node.debug_ring_state(); // Debug ring formation
             }
             node.estimate_network_size().await;
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(stabilization_interval)).await;
         }
     });
 
