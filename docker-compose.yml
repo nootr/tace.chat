@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.webclient
       args:
-        BOOTSTRAP_NODE_URL: node1:3001
+        BOOTSTRAP_NODE_URL: node1:6345
     ports:
       - "8081:80"
 
@@ -36,7 +36,8 @@ services:
       - "6513:6513"
     environment:
       - RUST_LOG=debug
-      - ADVERTISE_HOST=node1
+      - ADVERTISE_HOST=node2
+      - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6513
       - API_PORT=6346
     depends_on:
@@ -57,7 +58,8 @@ services:
       - "6514:6514"
     environment:
       - RUST_LOG=debug
-      - ADVERTISE_HOST=node1
+      - ADVERTISE_HOST=node3
+      - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6514
       - API_PORT=6347
     depends_on:
@@ -78,7 +80,8 @@ services:
       - "6515:6515"
     environment:
       - RUST_LOG=debug
-      - ADVERTISE_HOST=node1
+      - ADVERTISE_HOST=node4
+      - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6515
       - API_PORT=6348
     depends_on:
