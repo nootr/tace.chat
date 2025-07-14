@@ -1,8 +1,10 @@
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, Key, KeyInit, Nonce};
+use ecdsa::signature::Verifier;
 use hkdf::Hkdf;
+use p256::ecdsa::signature::Signer;
 use p256::{
-    ecdsa::{SigningKey, VerifyingKey},
+    ecdsa::{Signature, SigningKey, VerifyingKey},
     PublicKey, SecretKey,
 };
 use rand_core::OsRng;
@@ -81,6 +83,30 @@ pub fn decrypt(
     Ok(plaintext)
 }
 
+pub fn sign(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, String> {
+    let private_bytes = hex::decode(private_key_hex).map_err(|e| e.to_string())?;
+    let signing_key = SigningKey::from_slice(&private_bytes).map_err(|e| e.to_string())?;
+    let signature: Signature = signing_key.sign(message);
+    Ok(signature.to_vec())
+}
+
+pub fn verify(public_key_hex: &str, message: &[u8], signature_bytes: &[u8]) -> bool {
+    let public_bytes = match hex::decode(public_key_hex) {
+        Ok(bytes) => bytes,
+        Err(_) => return false,
+    };
+    let signature = match Signature::from_slice(signature_bytes) {
+        Ok(sig) => sig,
+        Err(_) => return false,
+    };
+    let verifying_key = match VerifyingKey::from_sec1_bytes(&public_bytes) {
+        Ok(key) => key,
+        Err(_) => return false,
+    };
+
+    verifying_key.verify(message, &signature).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +172,56 @@ mod tests {
         assert!(
             result.is_err(),
             "Decryption should have failed with the wrong key, but it succeeded."
+        );
+    }
+
+    #[test]
+    fn test_sign_verify_roundtrip() {
+        let keys = generate_keypair();
+        let message = b"this is a test message";
+
+        // Sign the message
+        let signature = sign(&keys.private_key, message).expect("Signing failed");
+
+        // Verify the signature
+        let is_valid = verify(&keys.public_key, message, &signature);
+        assert!(
+            is_valid,
+            "Signature verification failed for a valid signature."
+        );
+    }
+
+    #[test]
+    fn test_verify_fails_with_wrong_key() {
+        let keys1 = generate_keypair();
+        let keys2 = generate_keypair(); // Different key
+        let message = b"another test message";
+
+        // Sign with key1
+        let signature = sign(&keys1.private_key, message).expect("Signing failed");
+
+        // Try to verify with key2
+        let is_valid = verify(&keys2.public_key, message, &signature);
+        assert!(
+            !is_valid,
+            "Signature verification should have failed with the wrong public key."
+        );
+    }
+
+    #[test]
+    fn test_verify_fails_with_tampered_message() {
+        let keys = generate_keypair();
+        let original_message = b"original message";
+        let tampered_message = b"tampered message";
+
+        // Sign the original message
+        let signature = sign(&keys.private_key, original_message).expect("Signing failed");
+
+        // Try to verify with the tampered message
+        let is_valid = verify(&keys.public_key, tampered_message, &signature);
+        assert!(
+            !is_valid,
+            "Signature verification should have failed for a tampered message."
         );
     }
 }

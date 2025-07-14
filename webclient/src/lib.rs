@@ -60,6 +60,13 @@ pub fn decrypt(
     }
 }
 
+// --- Signing ---
+
+#[wasm_bindgen]
+pub fn sign(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, JsValue> {
+    keys::sign(private_key_hex, message).map_err(|e| JsValue::from_str(&e))
+}
+
 #[wasm_bindgen(start)]
 pub fn main_js() -> Result<(), JsValue> {
     // This function is called when the WASM module is loaded.

@@ -1,6 +1,22 @@
-import init, { generate_keypair, encrypt, decrypt } from '../webclient/pkg/tace_webclient.js';
+import init, { generate_keypair, encrypt, decrypt, sign } from '../webclient/pkg/tace_webclient.js';
 
 const bootstrapNode = '__BOOTSTRAP_NODE_URL__';
+
+// Helper to convert hex string to Uint8Array
+function hexToUint8Array(hexString) {
+    if (hexString.length % 2 !== 0) {
+        throw "Invalid hexString";
+    }
+    const arrayBuffer = new Uint8Array(hexString.length / 2);
+    for (let i = 0; i < hexString.length; i += 2) {
+        const byteValue = parseInt(hexString.substr(i, 2), 16);
+        if (isNaN(byteValue)) {
+            throw "Invalid hexString";
+        }
+        arrayBuffer[i / 2] = byteValue;
+    }
+    return arrayBuffer;
+}
 
 document.addEventListener('alpine:init', () => {
     Alpine.data('app', function () {
@@ -76,9 +92,16 @@ document.addEventListener('alpine:init', () => {
                 try {
                     const response = await fetch(url, options);
                     if (!response.ok) {
+                        // For 4xx errors, don't retry, just throw
+                        if (response.status >= 400 && response.status < 500) {
+                            const errData = await response.json().catch(() => ({ error: 'Request failed with client error.' }));
+                            throw new Error(errData.error || `HTTP error! status: ${response.status}`);
+                        }
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }
-                    return await response.json();
+                    // Handle cases with no content
+                    const text = await response.text();
+                    return text ? JSON.parse(text) : {};
                 } catch (error) {
                     console.error(`API request to ${url} failed:`, error);
                     if (retries > 0) {
@@ -212,8 +235,6 @@ document.addEventListener('alpine:init', () => {
                 navigator.clipboard.writeText(element.value);
             },
 
-
-
             startPolling() {
                 this.pollMessages();
                 setInterval(() => this.pollMessages(), 5000);
@@ -222,7 +243,30 @@ document.addEventListener('alpine:init', () => {
             async pollMessages() {
                 if (!this.keys.public_key) return;
                 try {
-                    const data = await this.apiRequest(`/poll?public_key=${encodeURIComponent(this.keys.public_key)}`);
+                    // 1. Get challenge
+                    const challengeData = await this.apiRequest(`/poll/challenge?public_key=${encodeURIComponent(this.keys.public_key)}`);
+                    const nonceHex = challengeData.nonce;
+                    if (!nonceHex) {
+                        throw new Error("Did not receive a challenge nonce.");
+                    }
+                    const nonce = hexToUint8Array(nonceHex);
+
+                    // 2. Sign challenge
+                    const signature = sign(this.keys.private_key, nonce);
+
+                    // 3. Poll with signed challenge
+                    const payload = {
+                        public_key: this.keys.public_key,
+                        nonce: Array.from(nonce),
+                        signature: Array.from(signature),
+                    };
+
+                    const data = await this.apiRequest('/poll', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+
 
                     if (data.messages && data.messages.length > 0) {
                         data.messages.forEach(msg => {
@@ -264,7 +308,7 @@ document.addEventListener('alpine:init', () => {
                         });
                     }
                 } catch (e) {
-                    console.error('Error polling messages:', e);
+                    console.error('Error polling messages:', e.message);
                 }
             }
         }

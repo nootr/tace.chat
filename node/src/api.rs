@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Full};
 use hyper::server::conn::http1;
@@ -17,7 +19,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha1::{Digest, Sha1};
 use tace_lib::dht_messages::{DhtMessage, NodeId};
+use tace_lib::keys;
 use tokio::net::TcpListener;
+use tokio::sync::OnceCell;
 
 use crate::{network_client::NetworkClient, ChordNode};
 
@@ -43,6 +47,30 @@ struct StoredMessage {
     ciphertext: Vec<u8>,
     nonce: Vec<u8>,
     timestamp: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct PollRequestPayload {
+    public_key: String,
+    nonce: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+// Store challenges with a timestamp to prevent them from living forever
+struct Challenge {
+    nonce: Vec<u8>,
+    timestamp: Instant,
+}
+
+type ChallengeMap = Arc<Mutex<HashMap<String, Challenge>>>;
+
+static CHALLENGES: OnceCell<ChallengeMap> = OnceCell::const_new();
+const CHALLENGE_EXPIRATION: Duration = Duration::from_secs(60);
+
+async fn get_challenges() -> &'static ChallengeMap {
+    CHALLENGES
+        .get_or_init(|| async { Arc::new(Mutex::new(HashMap::new())) })
+        .await
 }
 
 fn generate_key(public_key: &str) -> NodeId {
@@ -133,11 +161,49 @@ async fn connect_handler<T: NetworkClient>(
     }
 
     // If we reach here, we failed to find a reachable node
-    error!("Failed to find a reachable node after {} attempts.", MAX_ATTEMPTS);
+    error!(
+        "Failed to find a reachable node after {} attempts.",
+        MAX_ATTEMPTS
+    );
     Ok(format_response(
         StatusCode::SERVICE_UNAVAILABLE,
         json!({ "error": "Could not find a reachable node in the network" }).to_string(),
     ))
+}
+
+async fn get_challenge_handler<B>(req: Request<B>) -> Result<Response<Full<Bytes>>, Infallible> {
+    let public_key = req
+        .uri()
+        .query()
+        .and_then(|q| q.split('&').find(|p| p.starts_with("public_key=")))
+        .and_then(|p| p.split('=').nth(1))
+        .map(|s| s.to_string());
+
+    let Some(public_key) = public_key else {
+        return Ok(format_response(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "Missing public_key parameter" }).to_string(),
+        ));
+    };
+
+    let challenges_map = get_challenges().await;
+    let mut challenges = challenges_map.lock().unwrap();
+
+    // Clean up expired challenges
+    challenges.retain(|_, c| c.timestamp.elapsed() < CHALLENGE_EXPIRATION);
+
+    // Generate a new challenge
+    let mut nonce = vec![0u8; 32];
+    OsRng.fill_bytes(&mut nonce);
+    let challenge = Challenge {
+        nonce: nonce.clone(),
+        timestamp: Instant::now(),
+    };
+    challenges.insert(public_key, challenge);
+
+    info!("Issued challenge for public key");
+    let response_body = json!({ "nonce": hex::encode(nonce) }).to_string();
+    Ok(format_response(StatusCode::OK, response_body))
 }
 
 async fn message_handler<T: NetworkClient>(
@@ -221,34 +287,69 @@ async fn message_handler<T: NetworkClient>(
     Ok(format_response(StatusCode::OK, response_body))
 }
 
-async fn poll_handler<T: NetworkClient>(
-    req: Request<hyper::body::Incoming>,
+async fn poll_handler<T: NetworkClient, B>(
+    req: Request<B>,
     node: Arc<ChordNode<T>>,
-) -> Result<Response<Full<Bytes>>, Infallible> {
-    // Extract public key from query parameters
-    let uri = req.uri();
-    let query = uri.query().unwrap_or("");
-    let params: Vec<(&str, &str)> = query
-        .split('&')
-        .filter_map(|s| {
-            let mut parts = s.split('=');
-            Some((parts.next()?, parts.next()?))
-        })
-        .collect();
+) -> Result<Response<Full<Bytes>>, Infallible>
+where
+    B: Body + Send + 'static,
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let body_bytes = match req.collect().await {
+        Ok(body) => body.to_bytes(),
+        Err(e) => {
+            error!("Error reading request body: {}", e);
+            return Ok(format_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Failed to read request body" }).to_string(),
+            ));
+        }
+    };
 
-    let public_key = params
-        .iter()
-        .find(|(k, _)| k == &"public_key")
-        .map(|(_, v)| v);
+    let poll_payload: PollRequestPayload = match serde_json::from_slice(&body_bytes) {
+        Ok(payload) => payload,
+        Err(e) => {
+            error!("Failed to deserialize poll payload: {}", e);
+            return Ok(format_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "Invalid JSON payload" }).to_string(),
+            ));
+        }
+    };
 
-    if public_key.is_none() {
+    // Verify the challenge
+    let is_valid = {
+        let challenges_map = get_challenges().await;
+        let mut challenges = challenges_map.lock().unwrap();
+        if let Some(challenge) = challenges.get(&poll_payload.public_key) {
+            if challenge.nonce == poll_payload.nonce {
+                if keys::verify(
+                    &poll_payload.public_key,
+                    &poll_payload.nonce,
+                    &poll_payload.signature,
+                ) {
+                    // Valid signature, remove challenge and proceed
+                    challenges.remove(&poll_payload.public_key);
+                    true
+                } else {
+                    false // Invalid signature
+                }
+            } else {
+                false // Nonce mismatch
+            }
+        } else {
+            false // No challenge found
+        }
+    };
+
+    if !is_valid {
         return Ok(format_response(
-            StatusCode::BAD_REQUEST,
-            json!({ "error": "Missing public_key parameter" }).to_string(),
+            StatusCode::UNAUTHORIZED,
+            json!({ "error": "Invalid challenge response" }).to_string(),
         ));
     }
 
-    let key = generate_key(public_key.unwrap());
+    let key = generate_key(&poll_payload.public_key);
 
     // Find the node responsible for this key
     let responsible_node = node.find_successor(key).await;
@@ -298,8 +399,9 @@ async fn handler<T: NetworkClient + Send + Sync + 'static>(
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/ping") => Ok(ping_handler(req)),
         (&Method::GET, "/connect") => connect_handler(node).await,
+        (&Method::GET, "/poll/challenge") => get_challenge_handler(req).await,
         (&Method::POST, "/message") => message_handler(req, node).await,
-        (&Method::GET, "/poll") => poll_handler(req, node).await,
+        (&Method::POST, "/poll") => poll_handler(req, node).await,
         (&Method::OPTIONS, _) => {
             let mut response = format_response(StatusCode::OK, "");
             response.headers_mut().insert(
@@ -332,5 +434,150 @@ pub async fn run<T: NetworkClient + Send + Sync + 'static>(
                 error!("Error serving connection: {:?}", err);
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network_client::MockNetworkClient;
+    use http_body_util::BodyExt;
+    use serde_json::Value;
+
+    #[tokio::test]
+    async fn test_connect_handler_basic() {
+        let mock_client = MockNetworkClient::new();
+        let node = Arc::new(ChordNode::new_for_test(
+            "127.0.0.1:8000".to_string(),
+            Arc::new(mock_client),
+        ));
+
+        let response = connect_handler(node).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["node"], "127.0.0.1:8000");
+    }
+
+    #[tokio::test]
+    async fn test_get_challenge_handler() {
+        let keypair = keys::generate_keypair();
+        let req = Request::builder()
+            .uri(format!("/poll/challenge?public_key={}", keypair.public_key))
+            .body(http_body_util::Empty::<Bytes>::new())
+            .unwrap();
+
+        let response = get_challenge_handler(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.collect().await.unwrap().to_bytes();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let nonce_hex = v["nonce"].as_str().unwrap();
+        assert_eq!(nonce_hex.len(), 64); // 32 bytes = 64 hex chars
+    }
+
+    #[tokio::test]
+    async fn test_poll_handler_success() {
+        let keypair = keys::generate_keypair();
+        let mock_client = MockNetworkClient::new();
+        let node = Arc::new(ChordNode::new_for_test(
+            "0.0.0.0:0".to_string(),
+            Arc::new(mock_client),
+        ));
+
+        // 1. Get a challenge
+        let challenges_map = get_challenges().await;
+        let nonce = {
+            let mut challenges = challenges_map.lock().unwrap();
+            let mut nonce = vec![0u8; 32];
+            OsRng.fill_bytes(&mut nonce);
+            challenges.insert(
+                keypair.public_key.clone(),
+                Challenge {
+                    nonce: nonce.clone(),
+                    timestamp: Instant::now(),
+                },
+            );
+            nonce
+        };
+
+        // 2. Sign the challenge
+        let signature = keys::sign(&keypair.private_key, &nonce).unwrap();
+
+        // 3. Create the poll request
+        let payload = PollRequestPayload {
+            public_key: keypair.public_key.clone(),
+            nonce,
+            signature,
+        };
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/poll")
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(
+                serde_json::to_vec(&payload).unwrap(),
+            )))
+            .unwrap();
+
+        // 4. Call the handler
+        let response = poll_handler(req, node).await.unwrap();
+
+        // 5. Assert the response is OK
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 6. Assert the challenge was consumed
+        let challenges = challenges_map.lock().unwrap();
+        assert!(!challenges.contains_key(&keypair.public_key));
+    }
+
+    #[tokio::test]
+    async fn test_poll_handler_invalid_signature() {
+        let keypair = keys::generate_keypair();
+        let mock_client = MockNetworkClient::new();
+        let node = Arc::new(ChordNode::new_for_test(
+            "0.0.0.0:0".to_string(),
+            Arc::new(mock_client),
+        ));
+
+        // 1. Get a challenge
+        let challenges_map = get_challenges().await;
+        let nonce = {
+            let mut challenges = challenges_map.lock().unwrap();
+            let mut nonce = vec![0u8; 32];
+            OsRng.fill_bytes(&mut nonce);
+            challenges.insert(
+                keypair.public_key.clone(),
+                Challenge {
+                    nonce: nonce.clone(),
+                    timestamp: Instant::now(),
+                },
+            );
+            nonce
+        };
+
+        // 2. Sign a DIFFERENT message
+        let bad_signature = keys::sign(&keypair.private_key, b"wrong message").unwrap();
+
+        // 3. Create the poll request
+        let payload = PollRequestPayload {
+            public_key: keypair.public_key.clone(),
+            nonce,
+            signature: bad_signature,
+        };
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/poll")
+            .header("content-type", "application/json")
+            .body(Full::new(Bytes::from(
+                serde_json::to_vec(&payload).unwrap(),
+            )))
+            .unwrap();
+
+        // 4. Call the handler
+        let response = poll_handler(req, node).await.unwrap();
+
+        // 5. Assert the response is UNAUTHORIZED
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
