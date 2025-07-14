@@ -293,113 +293,112 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub async fn join(&self, bootstrap_address: Option<String>) {
-        match bootstrap_address {
-            Some(address) => {
-                log_info!(
+        let Some(address) = bootstrap_address else {
+            log_info!(
+                self.info.address,
+                "No bootstrap node provided. Starting a new network."
+            );
+            self.start_new_network().await;
+            return;
+        };
+
+        log_info!(
+            self.info.address,
+            "Attempting to join network via bootstrap node: {}",
+            address
+        );
+
+        // Find successor from bootstrap node
+        let response = self
+            .network_client
+            .call_node(&address, DhtMessage::FindSuccessor { id: self.info.id })
+            .await;
+
+        let successor_info = match response {
+            Ok(DhtMessage::FoundSuccessor {
+                id,
+                address,
+                api_address,
+            }) => NodeInfo {
+                id,
+                address,
+                api_address,
+            },
+            Ok(other) => {
+                log_error!(
                     self.info.address,
-                    "Attempting to join network via bootstrap node: {}",
-                    address
+                    "Unexpected response from bootstrap node: {:?}",
+                    other
                 );
-                // Find successor from bootstrap node
-                let response = self
-                    .network_client
-                    .call_node(&address, DhtMessage::FindSuccessor { id: self.info.id })
-                    .await;
-                match response {
-                    Ok(DhtMessage::FoundSuccessor {
-                        id,
-                        address,
-                        api_address,
-                    }) => {
-                        let successor_info = NodeInfo {
-                            id,
-                            address: address.clone(),
-                            api_address,
-                        };
+                return;
+            }
+            Err(e) => {
+                log_error!(
+                    self.info.address,
+                    "Failed to get successor from bootstrap node: {}",
+                    e
+                );
+                return;
+            }
+        };
 
-                        {
-                            let mut successor = self.successor.lock().unwrap();
-                            *successor = successor_info.clone();
-                            log_info!(
-                                self.info.address,
-                                "Joined network. Successor: {} at {}",
-                                hex::encode(successor.id),
-                                successor.address
-                            );
+        {
+            let mut successor = self.successor.lock().unwrap();
+            *successor = successor_info.clone();
+            log_info!(
+                self.info.address,
+                "Joined network. Successor: {} at {}",
+                hex::encode(successor.id),
+                successor.address
+            );
+        }
+
+        // Request data from successor that should belong to us
+        log_info!(
+            self.info.address,
+            "Requesting data transfer from successor {}",
+            successor_info.address
+        );
+
+        let data_response = self
+            .network_client
+            .call_node(
+                &successor_info.address,
+                DhtMessage::GetDataRange {
+                    start: self.info.id,
+                    end: successor_info.id,
+                },
+            )
+            .await;
+
+        match data_response {
+            Ok(DhtMessage::DataRange { data }) => {
+                if !data.is_empty() {
+                    log_info!(
+                        self.info.address,
+                        "Received {} keys from successor",
+                        data.len()
+                    );
+                    for (key, values) in data {
+                        for value in values {
+                            self.store(key, value).await;
                         }
-
-                        // Request data from successor that should belong to us
-                        // We are responsible for keys in range (predecessor.id, self.id]
-                        // Since we just joined, we need keys in range (self.id, successor.id]
-                        log_info!(
-                            self.info.address,
-                            "Requesting data transfer from successor {}",
-                            successor_info.address
-                        );
-
-                        match self
-                            .network_client
-                            .call_node(
-                                &successor_info.address,
-                                DhtMessage::GetDataRange {
-                                    start: self.info.id,
-                                    end: successor_info.id,
-                                },
-                            )
-                            .await
-                        {
-                            Ok(DhtMessage::DataRange { data }) => {
-                                if !data.is_empty() {
-                                    log_info!(
-                                        self.info.address,
-                                        "Received {} keys from successor",
-                                        data.len()
-                                    );
-                                    for (key, values) in data {
-                                        for value in values {
-                                            self.store(key, value).await;
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(other) => {
-                                log_error!(
-                                    self.info.address,
-                                    "Unexpected response to GetDataRange: {:?}",
-                                    other
-                                );
-                            }
-                            Err(e) => {
-                                log_error!(
-                                    self.info.address,
-                                    "Failed to get data from successor: {}",
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    Ok(other) => {
-                        log_error!(
-                            self.info.address,
-                            "Unexpected response from bootstrap node: {:?}",
-                            other
-                        );
-                    }
-                    Err(e) => {
-                        log_error!(
-                            self.info.address,
-                            "Failed to get successor from bootstrap node: {}",
-                            e
-                        );
                     }
                 }
             }
-            None => {
-                log_info!(
+            Ok(other) => {
+                log_error!(
                     self.info.address,
-                    "No bootstrap node provided. Starting a new network."
+                    "Unexpected response to GetDataRange: {:?}",
+                    other
                 );
-                self.start_new_network().await;
+            }
+            Err(e) => {
+                log_error!(
+                    self.info.address,
+                    "Failed to get data from successor: {}",
+                    e
+                );
             }
         }
     }
