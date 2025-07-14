@@ -13,14 +13,16 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3001:3001"
-      - "8001:8001"
+      - "6345:6345"
+      - "6512:6512"
     environment:
       - RUST_LOG=debug
-      - NODE_ADDRESS=node1:8001
-      - API_PORT=3001
+      - ADVERTISE_HOST=node1
+      - IS_BOOTSTRAP=true
+      - NODE_PORT=6512
+      - API_PORT=6345
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:6345/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -30,18 +32,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3002:3002"
-      - "8002:8002"
+      - "6346:6346"
+      - "6513:6513"
     environment:
       - RUST_LOG=debug
-      - NODE_ADDRESS=node2:8002
-      - API_PORT=3002
-      - BOOTSTRAP_ADDRESS=node1:8001
+      - ADVERTISE_HOST=node1
+      - NODE_PORT=6513
+      - API_PORT=6346
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:6346/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -51,18 +53,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3003:3003"
-      - "8003:8003"
+      - "6347:6347"
+      - "6514:6514"
     environment:
       - RUST_LOG=debug
-      - NODE_ADDRESS=node3:8003
-      - API_PORT=3003
-      - BOOTSTRAP_ADDRESS=node1:8001
+      - ADVERTISE_HOST=node1
+      - NODE_PORT=6514
+      - API_PORT=6347
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:6347/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -72,18 +74,18 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "3004:3004"
-      - "8004:8004"
+      - "6348:6348"
+      - "6515:6515"
     environment:
       - RUST_LOG=debug
-      - NODE_ADDRESS=node4:8004
-      - API_PORT=3004
-      - BOOTSTRAP_ADDRESS=node1:8001
+      - ADVERTISE_HOST=node1
+      - NODE_PORT=6515
+      - API_PORT=6348
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3004/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:6348/ping"]
       interval: 5s
       timeout: 3s
       retries: 5

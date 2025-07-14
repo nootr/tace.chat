@@ -10,22 +10,34 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
-    // Initialize logger
     env_logger::init();
 
-    let advertise_address =
-        env::var("NODE_ADDRESS").unwrap_or_else(|_| "127.0.0.1:8000".to_string());
-    let (advertise_host, advertise_port) = advertise_address
-        .split_once(':')
-        .expect("NODE_ADDRESS must be in the format HOST:PORT");
-    let bind_address =
-        env::var("BIND_ADDRESS").unwrap_or_else(|_| format!("0.0.0.0:{}", advertise_port));
-    let bootstrap_address = env::var("BOOTSTRAP_ADDRESS").ok();
-    let api_port: u16 = env::var("API_PORT")
-        .unwrap_or_else(|_| "8001".to_string())
+    let bind_host = env::var("BIND_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
+    let advertise_host = env::var("ADVERTISE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let node_port: u16 = env::var("NODE_PORT")
+        .unwrap_or_else(|_| "6512".to_string())
         .parse()
-        .expect("API_PORT must be a valid u16");
-    let api_address = format!("{}:{}", advertise_host, api_port);
+        .expect("BIND_PORT must be a valid integer");
+    let api_host = env::var("API_HOST").unwrap_or_else(|_| advertise_host.clone());
+    let api_port: u16 = env::var("API_PORT")
+        .unwrap_or_else(|_| "6345".to_string())
+        .parse()
+        .expect("BIND_PORT must be a valid integer");
+    let is_bootstrap = env::var("IS_BOOTSTRAP")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    let bootstrap_address = if is_bootstrap {
+        None
+    } else {
+        Some(match env::var("BOOTSTRAP_ADDRESS") {
+            Ok(addr) => addr,
+            _ => "bootstrap.tace.chat:6512".to_string(),
+        })
+    };
+
+    let bind_address = format!("{}:{}", bind_host, node_port);
+    let advertise_address = format!("{}:{}", advertise_host, node_port);
+    let api_address = format!("{}:{}", api_host, api_port);
 
     let node =
         Arc::new(ChordNode::new(advertise_address, api_address, Arc::new(RealNetworkClient)).await);

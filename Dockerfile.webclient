@@ -18,7 +18,7 @@ RUN wasm-pack build webclient --target web --release
 FROM nginx:1.27.0-alpine
 
 # Set bootstrap node URL
-ARG BOOTSTRAP_NODE_URL=bootstrap.tace.chat:8000
+ARG BOOTSTRAP_NODE_URL=bootstrap.tace.chat:6345
 RUN echo "Bootstrap URL: $BOOTSTRAP_NODE_URL"
 
 # Remove default Nginx configuration

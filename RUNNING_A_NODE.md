@@ -34,25 +34,17 @@ docker build -t tace-node -f Dockerfile.node .
 
 To run the node, you need to configure its public address and expose the correct ports. The node uses the following default ports:
 
--   **`8000/tcp`**: For P2P communication with other nodes.
--   **`8001/tcp`**: For the client API.
-
-You must provide the public-facing address of your node via the `NODE_ADDRESS` environment variable. You may also need to specify a `BOOTSTRAP_ADDRESS` to join the public network.
+-   **`6345/tcp`**: For the client API.
+-   **`6512/tcp`**: For P2P communication with other nodes.
 
 ```bash
 docker run -d \
-  -p 8000:8000/tcp \
-  -p 8001:8001/tcp \
-  -e NODE_ADDRESS="your_public_domain_or_ip:8000" \
-  -e BOOTSTRAP_ADDRESS="bootstrap.tace.chat:8000" \
+  -p 6345:6345/tcp \
+  -p 6512:6512/tcp \
+  -e ADVERTISE_HOST="<your_public_domain_or_ip>" \
   --name tace-node \
   tace-node
 ```
-
-**Replace the following values:**
-
--   `your_public_domain_or_ip:8000`: The public address and P2P port where your node can be reached.
--   `bootstrap.tace.chat:8000`: The address of a well-known node to join the network. (Note: This is an example address).
 
 ### Example
 
@@ -60,10 +52,9 @@ If your server's IP is `203.0.113.42`, the command would be:
 
 ```bash
 docker run -d \
-  -p 8000:8000/tcp \
-  -p 8001:8001/tcp \
-  -e NODE_ADDRESS="203.0.113.42:8000" \
-  -e BOOTSTRAP_ADDRESS="bootstrap.tace.chat:8000" \
+  -p 6345:6345/tcp \
+  -p 6512:6512/tcp \
+  -e ADVERTISE_HOST="203.0.113.42" \
   --name tace-node \
   tace-node
 ```
