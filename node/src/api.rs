@@ -358,7 +358,6 @@ where
         // This node is responsible, retrieve locally
         node.retrieve(key).await
     } else {
-        // Request from responsible node
         match node
             .network_client
             .call_node(&responsible_node.address, DhtMessage::Retrieve { key })
@@ -392,16 +391,25 @@ where
     Ok(format_response(StatusCode::OK, response_body))
 }
 
+async fn metrics_handler<T: NetworkClient>(
+    node: Arc<ChordNode<T>>,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    let metrics = node.metrics.lock().unwrap().clone();
+    let response_body = serde_json::to_string(&metrics).unwrap();
+    Ok(format_response(StatusCode::OK, response_body))
+}
+
 async fn handler<T: NetworkClient + Send + Sync + 'static>(
     req: Request<hyper::body::Incoming>,
     node: Arc<ChordNode<T>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/ping") => Ok(ping_handler(req)),
-        (&Method::GET, "/connect") => connect_handler(node).await,
+        (&Method::GET, "/connect") => connect_handler(node.clone()).await,
         (&Method::GET, "/poll/challenge") => get_challenge_handler(req).await,
-        (&Method::POST, "/message") => message_handler(req, node).await,
-        (&Method::POST, "/poll") => poll_handler(req, node).await,
+        (&Method::POST, "/message") => message_handler(req, node.clone()).await,
+        (&Method::POST, "/poll") => poll_handler(req, node.clone()).await,
+        (&Method::GET, "/metrics") => metrics_handler(node.clone()).await,
         (&Method::OPTIONS, _) => {
             let mut response = format_response(StatusCode::OK, "");
             response.headers_mut().insert(

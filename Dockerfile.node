@@ -6,6 +6,7 @@ WORKDIR /app
 COPY Cargo.toml .
 COPY lib lib
 COPY node node
+COPY collector collector
 COPY webclient webclient
 
 # Build the node

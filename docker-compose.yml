@@ -96,3 +96,29 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    ports:
+      - "8765:8765"
+    environment:
+      - RUST_LOG=info
+      - BOOTSTRAP_NODE_API_URL=http://node1:6345
+      - COLLECTOR_BIND_ADDRESS=0.0.0.0:8765
+      - METRICS_FETCH_INTERVAL_SECS=5
+      - SQLITE_DB_PATH=/app/data/metrics.sqlite
+    depends_on:
+      node1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - collector_db:/app/data
+
+volumes:
+  collector_db:

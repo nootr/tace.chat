@@ -1,0 +1,49 @@
+use http_body_util::BodyExt;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use log::{error, info};
+use rusqlite::Connection;
+use serde_json;
+use std::sync::Arc;
+use tace_lib::metrics::NetworkMetrics;
+
+use crate::db;
+
+pub async fn fetch_and_store_metrics(
+    bootstrap_node_api_url: String,
+    db_conn: Arc<tokio::sync::Mutex<Connection>>,
+) {
+    let client: Client<HttpConnector, http_body_util::Full<bytes::Bytes>> =
+        Client::builder(TokioExecutor::new()).build(HttpConnector::new());
+    let uri = match format!("{}/metrics", bootstrap_node_api_url).parse() {
+        Ok(uri) => uri,
+        Err(e) => {
+            error!("Failed to parse URI: {}", e);
+            return;
+        }
+    };
+
+    info!("Fetching metrics from {}", uri);
+
+    match client.get(uri).await {
+        Ok(res) => {
+            if res.status().is_success() {
+                let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
+                match serde_json::from_slice::<NetworkMetrics>(&body_bytes) {
+                    Ok(metrics) => {
+                        info!("Successfully fetched metrics: {:?}", metrics);
+                        let conn = db_conn.lock().await;
+                        if let Err(e) = db::insert_metrics(&conn, &metrics) {
+                            error!("Failed to insert metrics into DB: {}", e);
+                        }
+                    }
+                    Err(e) => error!("Failed to deserialize metrics: {}", e),
+                }
+            } else {
+                error!("Failed to fetch metrics: HTTP status {}", res.status());
+            }
+        }
+        Err(e) => error!("Failed to connect to bootstrap node: {}", e),
+    }
+}
