@@ -11,7 +11,7 @@ pub trait NetworkClient: Send + Sync + 'static {
         &self,
         address: &str,
         message: DhtMessage,
-    ) -> Result<DhtMessage, Box<dyn std::error::Error>>;
+    ) -> Result<DhtMessage, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 pub struct RealNetworkClient;
@@ -22,7 +22,7 @@ impl NetworkClient for RealNetworkClient {
         &self,
         address: &str,
         message: DhtMessage,
-    ) -> Result<DhtMessage, Box<dyn std::error::Error>> {
+    ) -> Result<DhtMessage, Box<dyn std::error::Error + Send + Sync>> {
         debug!("Attempting to connect to {}", address);
         let mut stream = match TcpStream::connect(address).await {
             Ok(stream) => {

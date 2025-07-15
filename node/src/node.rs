@@ -7,6 +7,7 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tace_lib::dht_messages::{DhtMessage, NodeId};
+use tace_lib::metrics::NetworkMetrics;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -41,7 +42,7 @@ pub struct ChordNode<T: NetworkClient> {
     pub finger_table: Arc<Mutex<Vec<NodeInfo>>>,
     pub data: Arc<Mutex<HashMap<NodeId, Vec<Vec<u8>>>>>,
     pub network_client: Arc<T>,
-    pub network_size_estimate: Arc<Mutex<f64>>,
+    pub metrics: Arc<Mutex<NetworkMetrics>>,
 }
 
 impl<T: NetworkClient> Clone for ChordNode<T> {
@@ -53,7 +54,7 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
             finger_table: self.finger_table.clone(),
             data: self.data.clone(), // This clones the Arc, not the HashMap
             network_client: self.network_client.clone(),
-            network_size_estimate: self.network_size_estimate.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -79,7 +80,7 @@ impl<T: NetworkClient> ChordNode<T> {
             finger_table,
             data,
             network_client,
-            network_size_estimate: Arc::new(Mutex::new(1.0)),
+            metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
         }
     }
 
@@ -104,7 +105,7 @@ impl<T: NetworkClient> ChordNode<T> {
             finger_table,
             data,
             network_client,
-            network_size_estimate: Arc::new(Mutex::new(1.0)),
+            metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
         }
     }
 
@@ -217,13 +218,15 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::Pong // Send a Pong response
                     }
                     DhtMessage::Ping => DhtMessage::Pong,
-                    DhtMessage::GetNetworkEstimate => {
-                        let estimate = *self.network_size_estimate.lock().unwrap();
-                        DhtMessage::NetworkEstimate { estimate }
-                    }
                     DhtMessage::GetDataRange { start, end } => {
                         let data = self.get_data_range(start, end).await;
                         DhtMessage::DataRange { data }
+                    }
+                    DhtMessage::ShareMetrics { metrics } => {
+                        let response_metrics = self.handle_share_metrics(metrics).await;
+                        DhtMessage::MetricsShared {
+                            metrics: response_metrics,
+                        }
                     }
                     _ => {
                         log_error!(
@@ -560,6 +563,151 @@ impl<T: NetworkClient> ChordNode<T> {
         self.info.clone()
     }
 
+    // Handles a ShareMetrics message by averaging with local metrics
+    // and returning the updated local metrics.
+    pub async fn handle_share_metrics(&self, incoming_metrics: NetworkMetrics) -> NetworkMetrics {
+        let mut local_metrics = self.metrics.lock().unwrap();
+
+        // Average the metrics
+        local_metrics.node_churn_rate =
+            (local_metrics.node_churn_rate + incoming_metrics.node_churn_rate) / 2.0;
+        local_metrics.routing_table_health =
+            (local_metrics.routing_table_health + incoming_metrics.routing_table_health) / 2.0;
+        local_metrics.operation_success_rate =
+            (local_metrics.operation_success_rate + incoming_metrics.operation_success_rate) / 2.0;
+        local_metrics.operation_latency =
+            (local_metrics.operation_latency + incoming_metrics.operation_latency) / 2;
+        local_metrics.message_type_ratio =
+            (local_metrics.message_type_ratio + incoming_metrics.message_type_ratio) / 2.0;
+
+        // Only gossip the estimated total network keys, not local key count
+        local_metrics.estimated_total_network_keys = (local_metrics.estimated_total_network_keys
+            + incoming_metrics.estimated_total_network_keys)
+            / 2;
+
+        // Average, bound, and smooth the network size estimate
+        let new_raw_estimate =
+            (local_metrics.network_size_estimate + incoming_metrics.network_size_estimate) / 2.0;
+        let bounded_estimate =
+            self.apply_bounds(local_metrics.network_size_estimate, new_raw_estimate);
+        let smoothed_estimate =
+            self.apply_smoothing(local_metrics.network_size_estimate, bounded_estimate);
+        local_metrics.network_size_estimate = smoothed_estimate;
+
+        local_metrics.clone()
+    }
+
+    // Periodically shares metrics with a random peer and updates local metrics
+    pub async fn share_and_update_metrics(&self) {
+        self.update_local_metrics().await;
+
+        // Collect all known nodes (successor + finger table)
+        let successor = self.successor.lock().unwrap().clone();
+        let finger_table = self.finger_table.lock().unwrap().clone();
+
+        // If we're the only node, no need to update
+        if successor.id == self.info.id {
+            return;
+        }
+
+        // Create a set of unique nodes (successor + fingers), excluding ourselves
+        let mut candidate_nodes = Vec::new();
+
+        // Add successor if it's not ourselves
+        if successor.id != self.info.id {
+            candidate_nodes.push(successor);
+        }
+
+        // Add unique finger table entries that are not ourselves
+        for finger in finger_table {
+            if finger.id != self.info.id && !candidate_nodes.iter().any(|n| n.id == finger.id) {
+                candidate_nodes.push(finger);
+            }
+        }
+
+        // If no candidates, return early
+        if candidate_nodes.is_empty() {
+            return;
+        }
+
+        // Pick a random node from candidates
+        let random_node = candidate_nodes.choose(&mut rand::thread_rng()).unwrap();
+
+        debug!(
+            "[{}] Sharing metrics with random neighbor {}",
+            self.info.address, random_node.address
+        );
+
+        let local_metrics = self.metrics.lock().unwrap().clone();
+
+        // Get neighbor's estimate
+        match self
+            .network_client
+            .call_node(
+                &random_node.address,
+                DhtMessage::ShareMetrics {
+                    metrics: local_metrics,
+                },
+            )
+            .await
+        {
+            Ok(DhtMessage::MetricsShared { metrics }) => {
+                self.handle_share_metrics(metrics).await;
+                debug!(
+                    "[{}] Metrics updated with neighbor {}",
+                    self.info.address, random_node.address
+                );
+            }
+            _ => {
+                log_error!(
+                    self.info.address,
+                    "Failed to get metrics from {}",
+                    random_node.address
+                );
+            }
+        }
+    }
+
+    // Updates the local metrics based on the node's current state
+    async fn update_local_metrics(&self) {
+        let mut local_metrics = self.metrics.lock().unwrap();
+
+        // Update routing table health
+        let finger_table = self.finger_table.lock().unwrap();
+        let filled_slots = finger_table.iter().filter(|n| n.id != self.info.id).count();
+        local_metrics.routing_table_health = filled_slots as f64 / M as f64;
+
+        // Update local key count (actual keys stored on this node)
+        let data = self.data.lock().unwrap();
+        local_metrics.local_key_count = data.len() as u64;
+        drop(data);
+
+        // Update network size estimate using generalized function
+        let local_size_estimate = self.calculate_local_network_size_estimate();
+        local_metrics.network_size_estimate = self.update_network_estimate_f64(
+            local_metrics.network_size_estimate,
+            local_size_estimate,
+            1.0,  // network_size: Use 1.0 since local estimate is already scaled
+            0.2,  // contribution_factor: Blend local observations with existing estimate
+            true, // apply_bounds: Network size should be bounded to prevent wild swings
+            0.1,  // smoothing_factor: Standard smoothing for network size
+        );
+
+        // Periodically contribute local key count to network estimate using generalized function
+        local_metrics.estimated_total_network_keys = self.update_network_estimate_u64(
+            local_metrics.estimated_total_network_keys,
+            local_metrics.local_key_count,
+            local_metrics.network_size_estimate,
+            0.1,   // contribution_factor: How much local data influences network estimate
+            false, // apply_bounds: Key counts can vary widely, don't bound them
+            0.05,  // smoothing_factor: Light smoothing for key count changes
+        );
+
+        // Other metrics like churn, success rate, latency, and message ratio
+        // would require more complex tracking over time.
+        // For now, we'll leave them as they are, to be updated by gossip.
+    }
+
     pub async fn stabilize(&self) {
         let successor = self.successor.lock().unwrap().clone();
 
@@ -787,127 +935,6 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    pub async fn fix_fingers(&self) {
-        // Pick a random finger to fix, to avoid all nodes fixing the same finger at the same time.
-        let i = rand::thread_rng().gen_range(1..M);
-        let target_id = tace_lib::add_id_power_of_2(&self.info.id, i);
-        let successor = self.find_successor(target_id).await;
-
-        // Update the finger table
-        let mut finger_table = self.finger_table.lock().unwrap();
-        finger_table[i] = successor;
-        debug!(
-            "[{}] Fingers: {:?}",
-            self.info.address,
-            finger_table
-                .iter()
-                .map(|f| f.address.clone())
-                .collect::<Vec<_>>()
-        );
-    }
-
-    pub async fn check_predecessor(&self) {
-        let predecessor_option = self.predecessor.lock().unwrap().clone();
-        if let Some(predecessor) = predecessor_option {
-            // Send a simple message to check if predecessor is alive
-            match self
-                .network_client
-                .call_node(&predecessor.address, DhtMessage::Ping)
-                .await
-            {
-                Ok(DhtMessage::Pong) => {
-                    // Predecessor is alive
-                }
-                _ => {
-                    // Predecessor is dead, clear it
-                    let mut p = self.predecessor.lock().unwrap();
-                    *p = None;
-                    debug!(
-                        "[{}] Predecessor {} is dead, clearing predecessor",
-                        self.info.address, predecessor.address
-                    );
-                }
-            }
-        }
-    }
-
-    pub async fn estimate_network_size(&self) {
-        // Calculate local network size estimate
-        let local_estimate = self.calculate_local_network_size_estimate();
-
-        // Collect all known nodes (successor + finger table)
-        let successor = self.successor.lock().unwrap().clone();
-        let finger_table = self.finger_table.lock().unwrap().clone();
-
-        // If we're the only node, no need to update
-        if successor.id == self.info.id {
-            return;
-        }
-
-        // Create a set of unique nodes (successor + fingers), excluding ourselves
-        let mut candidate_nodes = Vec::new();
-
-        // Add successor if it's not ourselves
-        if successor.id != self.info.id {
-            candidate_nodes.push(successor);
-        }
-
-        // Add unique finger table entries that are not ourselves
-        for finger in finger_table {
-            if finger.id != self.info.id && !candidate_nodes.iter().any(|n| n.id == finger.id) {
-                candidate_nodes.push(finger);
-            }
-        }
-
-        // If no candidates, return early
-        if candidate_nodes.is_empty() {
-            return;
-        }
-
-        // Pick a random node from candidates
-        let random_node = candidate_nodes.choose(&mut rand::thread_rng()).unwrap();
-
-        debug!(
-            "[{}] Querying random neighbor {} for network size estimate",
-            self.info.address, random_node.address
-        );
-
-        // Get neighbor's estimate
-        match self
-            .network_client
-            .call_node(&random_node.address, DhtMessage::GetNetworkEstimate)
-            .await
-        {
-            Ok(DhtMessage::NetworkEstimate {
-                estimate: neighbor_estimate,
-            }) => {
-                // Calculate new estimate by averaging with neighbor's estimate
-                let new_raw_estimate = (local_estimate + neighbor_estimate) / 2.0;
-
-                // Apply bounds and smoothing
-                let old_estimate = *self.network_size_estimate.lock().unwrap();
-                let bounded_estimate = self.apply_bounds(old_estimate, new_raw_estimate);
-                let smoothed_estimate = self.apply_smoothing(old_estimate, bounded_estimate);
-
-                // Update our estimate
-                let mut estimate = self.network_size_estimate.lock().unwrap();
-                *estimate = smoothed_estimate;
-
-                debug!(
-                    "[{}] Network size estimate updated: old={:.2}, neighbor={:.2}, local={:.2}, new={:.2}",
-                    self.info.address, old_estimate, neighbor_estimate, local_estimate, smoothed_estimate
-                );
-            }
-            _ => {
-                log_error!(
-                    self.info.address,
-                    "Failed to get network estimate from {}",
-                    random_node.address
-                );
-            }
-        }
-    }
-
     fn calculate_local_network_size_estimate(&self) -> f64 {
         let successor = self.successor.lock().unwrap();
         let predecessor = self.predecessor.lock().unwrap();
@@ -957,6 +984,107 @@ impl<T: NetworkClient> ChordNode<T> {
         (1.0 - smoothing_factor) * old_estimate + smoothing_factor * new_estimate
     }
 
+    /// Generalized network estimation function that handles local contribution,
+    /// scaling, bounds checking, and smoothing for network-wide metrics.
+    fn update_network_estimate_f64(
+        &self,
+        current_estimate: f64,
+        local_value: f64,
+        network_size: f64,
+        contribution_factor: f64,
+        apply_bounds: bool,
+        smoothing_factor: f64,
+    ) -> f64 {
+        let new_estimate = if current_estimate == 0.0 {
+            // Initialize with local value scaled by network size
+            local_value * network_size
+        } else {
+            // Blend local contribution with existing estimate
+            let local_contribution = local_value * network_size;
+            let blended = (1.0 - contribution_factor) * current_estimate
+                + contribution_factor * local_contribution;
+
+            // Apply bounds if requested
+            if apply_bounds {
+                self.apply_bounds(current_estimate, blended)
+            } else {
+                blended
+            }
+        };
+
+        // Apply smoothing if we have a previous estimate
+        if current_estimate > 0.0 {
+            (1.0 - smoothing_factor) * current_estimate + smoothing_factor * new_estimate
+        } else {
+            new_estimate
+        }
+    }
+
+    /// Generalized network estimation for u64 values (like key counts)
+    fn update_network_estimate_u64(
+        &self,
+        current_estimate: u64,
+        local_value: u64,
+        network_size: f64,
+        contribution_factor: f64,
+        apply_bounds: bool,
+        smoothing_factor: f64,
+    ) -> u64 {
+        let result = self.update_network_estimate_f64(
+            current_estimate as f64,
+            local_value as f64,
+            network_size,
+            contribution_factor,
+            apply_bounds,
+            smoothing_factor,
+        );
+        result.max(0.0) as u64
+    }
+
+    pub async fn fix_fingers(&self) {
+        // Pick a random finger to fix, to avoid all nodes fixing the same finger at the same time.
+        let i = rand::thread_rng().gen_range(1..M);
+        let target_id = tace_lib::add_id_power_of_2(&self.info.id, i);
+        let successor = self.find_successor(target_id).await;
+
+        // Update the finger table
+        let mut finger_table = self.finger_table.lock().unwrap();
+        finger_table[i] = successor;
+        debug!(
+            "[{}] Fingers: {:?}",
+            self.info.address,
+            finger_table
+                .iter()
+                .map(|f| f.address.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    pub async fn check_predecessor(&self) {
+        let predecessor_option = self.predecessor.lock().unwrap().clone();
+        if let Some(predecessor) = predecessor_option {
+            // Send a simple message to check if predecessor is alive
+            match self
+                .network_client
+                .call_node(&predecessor.address, DhtMessage::Ping)
+                .await
+            {
+                Ok(DhtMessage::Pong) => {
+                    // Predecessor is alive
+                }
+                _ => {
+                    // Predecessor is dead, clear it
+                    let mut p = self.predecessor.lock().unwrap();
+                    *p = None;
+                    debug!(
+                        "[{}] Predecessor {} is dead, clearing predecessor",
+                        self.info.address, predecessor.address
+                    );
+                }
+            }
+        }
+    }
+
     pub fn debug_ring_state(&self) {
         let successor = self.successor.lock().unwrap();
         let predecessor = self.predecessor.lock().unwrap();
@@ -1002,6 +1130,17 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tace_lib::dht_messages::{DhtMessage, NodeId};
+
+    #[derive(Debug)]
+    struct TestError(&'static str);
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{}", self.0)
+        }
+    }
+
+    impl std::error::Error for TestError {}
 
     fn hex_to_node_id(hex_str: &str) -> NodeId {
         let mut id = [0u8; 20];
@@ -1066,7 +1205,7 @@ mod tests {
             finger_table: Arc::new(Mutex::new(finger_table_vec)),
             data: Arc::new(Mutex::new(HashMap::new())),
             network_client: mock_network_client,
-            network_size_estimate: Arc::new(Mutex::new(1.0)),
+            metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
         };
 
         // Test case 1: ID is far away, should return the largest finger
@@ -1120,7 +1259,7 @@ mod tests {
                 address == "127.0.0.1:9999" && matches!(message, DhtMessage::Ping)
             })
             .times(1)
-            .returning(|_, _| Err("Simulated network error".into()));
+            .returning(|_, _| Err(Box::new(TestError("Simulated network error"))));
 
         let node =
             ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
@@ -1235,7 +1374,7 @@ mod tests {
                         ],
                     })
                 }
-                _ => Err("Unexpected message".into()),
+                _ => Err(Box::new(TestError("Unexpected message"))),
             });
 
         let node =
@@ -1327,7 +1466,7 @@ mod tests {
         // Mock network calls to always fail, triggering retry logic
         mock_network_client
             .expect_call_node()
-            .returning(|_, _| Err("Network error".into()));
+            .returning(|_, _| Err(Box::new(TestError("Network error"))));
 
         let node =
             ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
@@ -1378,7 +1517,7 @@ mod tests {
             finger_table: Arc::new(Mutex::new(vec![node_info.clone(); M])),
             data: Arc::new(Mutex::new(HashMap::new())),
             network_client: node.network_client.clone(),
-            network_size_estimate: Arc::new(Mutex::new(1.0)),
+            metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
         };
 
         // Test finding successor of ID 0 (wraparound case)
@@ -1459,7 +1598,7 @@ mod tests {
                 call_count += 1;
                 // First few calls fail (simulating partition), then succeed (recovery)
                 if call_count <= 2 {
-                    Err("Network partition - unreachable".into())
+                    Err(Box::new(TestError("Network partition - unreachable")))
                 } else {
                     Ok(DhtMessage::FoundSuccessor {
                         id: hex_to_node_id("2222222222222222222222222222222222222222"),
@@ -1801,12 +1940,19 @@ mod tests {
     async fn test_network_size_estimation_with_mock_neighbor() {
         let mut mock_network_client = MockNetworkClient::new();
 
-        // Mock the neighbor's response
+        // Mock the neighbor's response with metrics
+        let mut neighbor_metrics = NetworkMetrics::default();
+        neighbor_metrics.network_size_estimate = 3.5;
+
         mock_network_client
             .expect_call_node()
-            .withf(|_, message| matches!(message, DhtMessage::GetNetworkEstimate))
+            .withf(|_, message| matches!(message, DhtMessage::ShareMetrics { .. }))
             .times(1)
-            .returning(|_, _| Ok(DhtMessage::NetworkEstimate { estimate: 3.5 }));
+            .returning(move |_, _| {
+                Ok(DhtMessage::MetricsShared {
+                    metrics: neighbor_metrics.clone(),
+                })
+            });
 
         let node =
             ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
@@ -1829,11 +1975,11 @@ mod tests {
         };
         drop(finger_table);
 
-        let initial_estimate = *node.network_size_estimate.lock().unwrap();
+        let initial_estimate = node.metrics.lock().unwrap().network_size_estimate;
 
-        node.estimate_network_size().await;
+        node.share_and_update_metrics().await;
 
-        let final_estimate = *node.network_size_estimate.lock().unwrap();
+        let final_estimate = node.metrics.lock().unwrap().network_size_estimate;
 
         // The estimate should have been updated (should be different from initial)
         assert_ne!(initial_estimate, final_estimate);
@@ -1887,12 +2033,12 @@ mod tests {
         let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
 
         // In a single node network, successor points to self
-        // estimate_network_size should return early without making network calls
-        let initial_estimate = *node.network_size_estimate.lock().unwrap();
+        // share_and_update_metrics should return early without making network calls
+        let initial_estimate = node.metrics.lock().unwrap().network_size_estimate;
 
-        node.estimate_network_size().await;
+        node.share_and_update_metrics().await;
 
-        let final_estimate = *node.network_size_estimate.lock().unwrap();
+        let final_estimate = node.metrics.lock().unwrap().network_size_estimate;
 
         // Estimate should be unchanged since we're the only node
         assert_eq!(initial_estimate, final_estimate);
@@ -1902,12 +2048,19 @@ mod tests {
     async fn test_random_neighbor_selection() {
         let mut mock_network_client = MockNetworkClient::new();
 
-        // Mock response for any network estimate request
+        // Mock response for any metrics sharing request
+        let mut neighbor_metrics = NetworkMetrics::default();
+        neighbor_metrics.network_size_estimate = 4.0;
+
         mock_network_client
             .expect_call_node()
-            .withf(|_, message| matches!(message, DhtMessage::GetNetworkEstimate))
+            .withf(|_, message| matches!(message, DhtMessage::ShareMetrics { .. }))
             .times(1)
-            .returning(|_, _| Ok(DhtMessage::NetworkEstimate { estimate: 4.0 }));
+            .returning(move |_, _| {
+                Ok(DhtMessage::MetricsShared {
+                    metrics: neighbor_metrics.clone(),
+                })
+            });
 
         let node =
             ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
@@ -1936,10 +2089,10 @@ mod tests {
         drop(finger_table);
 
         // Run estimation - it should succeed in picking a random neighbor
-        node.estimate_network_size().await;
+        node.share_and_update_metrics().await;
 
         // The estimate should have been updated from the mock response
-        let final_estimate = *node.network_size_estimate.lock().unwrap();
+        let final_estimate = node.metrics.lock().unwrap().network_size_estimate;
         assert!(final_estimate > 0.0);
     }
 
@@ -1988,5 +2141,268 @@ mod tests {
         // Verify the ring property: predecessor < self < successor (accounting for wraparound)
         // In this case: node3 > node1 < node2, which is valid with wraparound
         assert!(tace_lib::is_between(&node1.info.id, &node3_id, &node2_id));
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_metrics_averages_all_fields() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Set up initial local metrics
+        {
+            let mut local_metrics = node.metrics.lock().unwrap();
+            local_metrics.node_churn_rate = 0.1;
+            local_metrics.routing_table_health = 0.8;
+            local_metrics.operation_success_rate = 0.9;
+            local_metrics.operation_latency = std::time::Duration::from_millis(100);
+            local_metrics.message_type_ratio = 0.6;
+            local_metrics.local_key_count = 50;
+            local_metrics.estimated_total_network_keys = 50;
+            local_metrics.network_size_estimate = 10.0;
+        }
+
+        // Create incoming metrics with different values
+        let incoming_metrics = NetworkMetrics {
+            node_churn_rate: 0.3,
+            routing_table_health: 0.6,
+            operation_success_rate: 0.7,
+            operation_latency: std::time::Duration::from_millis(200),
+            message_type_ratio: 0.4,
+            local_key_count: 30,
+            estimated_total_network_keys: 30,
+            network_size_estimate: 20.0,
+        };
+
+        // Handle metrics sharing
+        let result_metrics = node.handle_share_metrics(incoming_metrics).await;
+
+        // Verify all fields are properly averaged
+        assert_eq!(result_metrics.node_churn_rate, 0.2); // (0.1 + 0.3) / 2
+        assert_eq!(result_metrics.routing_table_health, 0.7); // (0.8 + 0.6) / 2
+        assert_eq!(result_metrics.operation_success_rate, 0.8); // (0.9 + 0.7) / 2
+        assert_eq!(
+            result_metrics.operation_latency,
+            std::time::Duration::from_millis(150)
+        ); // (100 + 200) / 2
+        assert_eq!(result_metrics.message_type_ratio, 0.5); // (0.6 + 0.4) / 2
+        assert_eq!(result_metrics.estimated_total_network_keys, 40); // (50 + 30) / 2
+
+        // Network size estimate should be bounded and smoothed, not just averaged
+        assert!(result_metrics.network_size_estimate > 10.0);
+        assert!(result_metrics.network_size_estimate < 20.0);
+    }
+
+    #[tokio::test]
+    async fn test_update_local_metrics_routing_table_health() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Set up finger table with some filled and some empty slots
+        let successor = NodeInfo {
+            id: hex_to_node_id("1111111111111111111111111111111111111111"),
+            address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
+        };
+        *node.successor.lock().unwrap() = successor.clone();
+
+        {
+            let mut finger_table = node.finger_table.lock().unwrap();
+            // Fill first 3 slots with different nodes, rest point to self (empty)
+            finger_table[0] = successor.clone();
+            finger_table[1] = NodeInfo {
+                id: hex_to_node_id("2222222222222222222222222222222222222222"),
+                address: "127.0.0.1:9002".to_string(),
+                api_address: "127.0.0.1:9002".to_string(),
+            };
+            finger_table[2] = NodeInfo {
+                id: hex_to_node_id("3333333333333333333333333333333333333333"),
+                address: "127.0.0.1:9003".to_string(),
+                api_address: "127.0.0.1:9003".to_string(),
+            };
+            // Other slots remain pointing to self (indicating empty slots)
+        }
+
+        // Update local metrics
+        node.update_local_metrics().await;
+
+        // Verify routing table health calculation
+        let metrics = node.metrics.lock().unwrap();
+        let expected_health = 3.0 / M as f64; // 3 filled slots out of M total slots
+        assert_eq!(metrics.routing_table_health, expected_health);
+    }
+
+    #[tokio::test]
+    async fn test_update_local_metrics_key_count() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Add some data to the node
+        {
+            let mut data = node.data.lock().unwrap();
+            data.insert(
+                hex_to_node_id("1111111111111111111111111111111111111111"),
+                vec![vec![1, 2, 3]],
+            );
+            data.insert(
+                hex_to_node_id("2222222222222222222222222222222222222222"),
+                vec![vec![4, 5, 6]],
+            );
+            data.insert(
+                hex_to_node_id("3333333333333333333333333333333333333333"),
+                vec![vec![7, 8, 9]],
+            );
+        }
+
+        // Update local metrics
+        node.update_local_metrics().await;
+
+        // Verify key count is properly updated
+        let metrics = node.metrics.lock().unwrap();
+        assert_eq!(metrics.local_key_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_sharing_full_workflow() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock neighbor's response
+        let neighbor_metrics = NetworkMetrics {
+            node_churn_rate: 0.2,
+            routing_table_health: 0.7,
+            operation_success_rate: 0.8,
+            operation_latency: std::time::Duration::from_millis(150),
+            message_type_ratio: 0.5,
+            local_key_count: 25,
+            estimated_total_network_keys: 25,
+            network_size_estimate: 15.0,
+        };
+
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::ShareMetrics { .. }))
+            .times(1)
+            .returning(move |_, _| {
+                Ok(DhtMessage::MetricsShared {
+                    metrics: neighbor_metrics.clone(),
+                })
+            });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up initial state
+        {
+            let mut local_metrics = node.metrics.lock().unwrap();
+            local_metrics.node_churn_rate = 0.1;
+            local_metrics.routing_table_health = 0.9;
+            local_metrics.operation_success_rate = 0.95;
+            local_metrics.operation_latency = std::time::Duration::from_millis(50);
+            local_metrics.message_type_ratio = 0.7;
+            local_metrics.local_key_count = 35;
+            local_metrics.estimated_total_network_keys = 35;
+            local_metrics.network_size_estimate = 5.0;
+        }
+
+        // Set up successor for metrics sharing
+        let successor = NodeInfo {
+            id: hex_to_node_id("1111111111111111111111111111111111111111"),
+            address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
+        };
+        *node.successor.lock().unwrap() = successor;
+
+        // Run the full metrics sharing workflow
+        node.share_and_update_metrics().await;
+
+        // Verify metrics were updated through the sharing process
+        let final_metrics = node.metrics.lock().unwrap();
+
+        // Values should be influenced by neighbor's metrics, not just local
+        assert_ne!(final_metrics.node_churn_rate, 0.1);
+        assert_ne!(final_metrics.routing_table_health, 0.9);
+        assert_ne!(final_metrics.operation_success_rate, 0.95);
+        assert_ne!(
+            final_metrics.operation_latency,
+            std::time::Duration::from_millis(50)
+        );
+        assert_ne!(final_metrics.message_type_ratio, 0.7);
+        assert_ne!(final_metrics.local_key_count, 35);
+        assert_ne!(final_metrics.network_size_estimate, 5.0);
+    }
+
+    #[tokio::test]
+    async fn test_metrics_convergence_over_multiple_rounds() {
+        let mut mock_network_client = MockNetworkClient::new();
+
+        // Mock a single round of metrics sharing
+        let neighbor_metrics = NetworkMetrics {
+            node_churn_rate: 0.5,
+            routing_table_health: 0.5,
+            operation_success_rate: 0.5,
+            operation_latency: std::time::Duration::from_millis(500),
+            message_type_ratio: 0.5,
+            local_key_count: 50,
+            estimated_total_network_keys: 50,
+            network_size_estimate: 50.0,
+        };
+
+        mock_network_client
+            .expect_call_node()
+            .withf(|_, message| matches!(message, DhtMessage::ShareMetrics { .. }))
+            .times(1)
+            .returning(move |_, _| {
+                Ok(DhtMessage::MetricsShared {
+                    metrics: neighbor_metrics.clone(),
+                })
+            });
+
+        let node =
+            ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));
+
+        // Set up initial extreme values
+        {
+            let mut local_metrics = node.metrics.lock().unwrap();
+            local_metrics.node_churn_rate = 0.0;
+            local_metrics.routing_table_health = 1.0;
+            local_metrics.operation_success_rate = 1.0;
+            local_metrics.operation_latency = std::time::Duration::from_millis(0);
+            local_metrics.message_type_ratio = 1.0;
+            local_metrics.local_key_count = 0;
+            local_metrics.estimated_total_network_keys = 0;
+            local_metrics.network_size_estimate = 1.0;
+        }
+
+        // Set up successor for metrics sharing
+        let successor = NodeInfo {
+            id: hex_to_node_id("1111111111111111111111111111111111111111"),
+            address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
+        };
+        *node.successor.lock().unwrap() = successor.clone();
+
+        // Set up finger table to ensure we have candidates for metrics sharing
+        {
+            let mut finger_table = node.finger_table.lock().unwrap();
+            finger_table[0] = successor;
+        }
+
+        // Get initial values
+        let initial_churn_rate = node.metrics.lock().unwrap().node_churn_rate;
+        let initial_network_size = node.metrics.lock().unwrap().network_size_estimate;
+
+        // Run one round of metrics sharing
+        node.share_and_update_metrics().await;
+
+        let final_metrics = node.metrics.lock().unwrap();
+        let final_churn_rate = final_metrics.node_churn_rate;
+        let final_network_size = final_metrics.network_size_estimate;
+
+        // Values should be converging towards the middle after sharing
+        assert!(final_churn_rate > initial_churn_rate);
+        assert!(final_network_size > initial_network_size);
+
+        // After sharing, values should be closer to the neighbor's values
+        assert!(final_metrics.node_churn_rate > 0.1); // Should be moving towards 0.5
+        assert!(final_metrics.network_size_estimate > 1.0); // Should be moving towards 50.0 (with bounds/smoothing)
     }
 }

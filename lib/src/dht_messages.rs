@@ -1,3 +1,4 @@
+use crate::metrics::NetworkMetrics;
 use serde::{Deserialize, Serialize};
 
 // Placeholder for a Node ID (e.g., SHA1 hash)
@@ -71,11 +72,6 @@ pub enum DhtMessage {
     GetSuccessor,
     Ping,
     Pong,
-    // Network size estimation
-    GetNetworkEstimate,
-    NetworkEstimate {
-        estimate: f64,
-    },
     // Request data in a key range (used when a node joins and needs data)
     GetDataRange {
         start: NodeId,
@@ -84,5 +80,12 @@ pub enum DhtMessage {
     // Response with data in the requested range
     DataRange {
         data: Vec<(NodeId, Vec<Vec<u8>>)>,
+    },
+    // Metrics sharing
+    ShareMetrics {
+        metrics: NetworkMetrics,
+    },
+    MetricsShared {
+        metrics: NetworkMetrics,
     },
 }

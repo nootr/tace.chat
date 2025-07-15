@@ -67,7 +67,7 @@ async fn main() {
             if log::log_enabled!(log::Level::Debug) {
                 node.debug_ring_state(); // Debug ring formation
             }
-            node.estimate_network_size().await;
+            node.share_and_update_metrics().await;
             tokio::time::sleep(tokio::time::Duration::from_secs(stabilization_interval)).await;
         }
     });
