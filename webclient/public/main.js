@@ -52,12 +52,7 @@ document.addEventListener('alpine:init', () => {
                 }
 
                 this.$watch('activeContactId', () => {
-                    this.$nextTick(() => {
-                        const chatWindow = document.getElementById('chat-window');
-                        if (chatWindow) {
-                            chatWindow.scrollTop = chatWindow.scrollHeight;
-                        }
-                    });
+                    this.$nextTick(this.scrollToBottom);
                 });
 
                 this.$watch('metricsModalOpen', (val) => {
@@ -221,6 +216,7 @@ document.addEventListener('alpine:init', () => {
                     }
                     this.messages[this.activeContactId].push(message);
                     this.newMessage = '';
+                    this.$nextTick(() => this.scrollToBottom());
                 } catch (e) {
                     console.error("Failed to send message:", e);
                     alert("Failed to send message. The node might be offline.");
@@ -298,6 +294,13 @@ document.addEventListener('alpine:init', () => {
             attemptCloseTermsModal() {
                 if (this.termsAccepted) {
                     this.showTermsModal = false;
+                }
+            },
+
+            scrollToBottom() {
+                const chatWindow = document.getElementById('chat-window');
+                if (chatWindow) {
+                    chatWindow.scrollTop = chatWindow.scrollHeight;
                 }
             },
 
@@ -447,6 +450,7 @@ document.addEventListener('alpine:init', () => {
                                     from: msg.from,
                                 };
                                 this.messages[contact.id].push(newMsg);
+                                this.$nextTick(() => this.scrollToBottom());
                             }
                         });
                     }
