@@ -23,7 +23,9 @@ jobs:
         context: .
         file: ./Dockerfile.collector
         push: true
-        tags: ${{ secrets.DOCKER_USERNAME }}/tace-collector:latest
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/tace-collector:${{ github.ref_name }}
+          ${{ secrets.DOCKER_USERNAME }}/tace-collector:latest
 
     - name: Build and push node image
       uses: docker/build-push-action@v5
@@ -31,4 +33,6 @@ jobs:
         context: .
         file: ./Dockerfile.node
         push: true
-        tags: ${{ secrets.DOCKER_USERNAME }}/tace-node:latest
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/tace-node:${{ github.ref_name }}
+          ${{ secrets.DOCKER_USERNAME }}/tace-node:latest
