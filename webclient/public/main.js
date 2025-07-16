@@ -29,8 +29,8 @@ document.addEventListener('alpine:init', () => {
             settingsModalOpen: false,
             addContactModalOpen: false,
             metricsModalOpen: false,
-            showDisclaimerModal: this.$persist(true).as('tace_disclaimer_modal_open'),
-            disclaimerChecked: false,
+            showTermsModal: this.$persist(true).as('tace_terms_modal_open'),
+            termsAccepted: false,
             search: '',
             newMessage: '',
             newContact: { name: '', publicKey: '' },
@@ -40,7 +40,59 @@ document.addEventListener('alpine:init', () => {
             // Collector URL - will be replaced by Dockerfile during build
             collectorUrl: '__COLLECTOR_URL__',
 
-            // Init
+            init() {
+                this.$watch('showTermsModal', async (val) => {
+                    if (!val) {
+                        await this.initWasmAndApp();
+                    }
+                });
+
+                if (!this.showTermsModal) {
+                    this.initWasmAndApp();
+                }
+
+                this.$watch('activeContactId', () => {
+                    this.$nextTick(() => {
+                        const chatWindow = document.getElementById('chat-window');
+                        if (chatWindow) {
+                            chatWindow.scrollTop = chatWindow.scrollHeight;
+                        }
+                    });
+                });
+
+                this.$watch('metricsModalOpen', (val) => {
+                    if (val) {
+                        this.$nextTick(() => {
+                            if (!this.metricsLoaded) {
+                                this.fetchMetrics();
+                                this.metricsLoaded = true;
+                            }
+                        });
+                    } else {
+                        if (this.metricsChart) {
+                            this.metricsChart.destroy();
+                            this.metricsChart = null;
+                        }
+                        this.metricsLoaded = false;
+                    }
+                });
+            },
+
+            async initWasmAndApp() {
+                await init();
+                await this.loadNodeUrl();
+                if (!this.keys.private_key || !this.keys.public_key) {
+                    console.log('No keys found, generating new ones...');
+                    const keypair = generate_keypair();
+                    this.keys = {
+                        private_key: keypair.private_key,
+                        public_key: keypair.public_key,
+                    };
+                    keypair.free();
+                }
+                this.startPolling();
+                console.log('App Initialized');
+            },
 
             // Computed Properties
             get filteredContacts() {
@@ -243,9 +295,9 @@ document.addEventListener('alpine:init', () => {
                 navigator.clipboard.writeText(element.value);
             },
 
-            attemptCloseDisclaimerModal() {
-                if (this.disclaimerChecked) {
-                    this.showDisclaimerModal = false;
+            attemptCloseTermsModal() {
+                if (this.termsAccepted) {
+                    this.showTermsModal = false;
                 }
             },
 

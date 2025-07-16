@@ -142,15 +142,15 @@
     </div>
 
     <!-- Modals -->
-    <div class="modal-container" x-show="showDisclaimerModal" @click.self="attemptCloseDisclaimerModal()" style="display: none;">
+    <div class="modal-container" x-show="showTermsModal" @click.self="attemptCloseTermsModal()" style="display: none;">
         <div class="modal-content">
-            <h2>Welcome to Tace Chat</h2>
-            <p>Please read <a href="https://github.com/nootr/tace.chat#disclaimer">the disclaimer</a> carefully before using Tace Chat.</p>
+            <h2>Terms and Conditions</h2>
+            <p>Please read our <a href="https://github.com/nootr/tace.chat/blob/main/TERMS_AND_CONDITIONS.md" target="_blank" rel="noopener noreferrer">Terms and Conditions</a> carefully before using Tace Chat.</p>
             <div class="disclaimer-checkbox">
-                <input type="checkbox" id="disclaimer-checkbox" x-model="disclaimerChecked">
-                <label for="disclaimer-checkbox">I have read and understand the disclaimer.</label>
+                <input type="checkbox" id="terms-checkbox" x-model="termsAccepted">
+                <label for="terms-checkbox">I have read and understand the Terms and Conditions.</label>
             </div>
-            <button @click="attemptCloseDisclaimerModal()" :disabled="!disclaimerChecked">Continue</button>
+            <button @click="attemptCloseTermsModal()" :disabled="!termsAccepted">Continue</button>
         </div>
     </div>
 
