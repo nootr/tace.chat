@@ -46,11 +46,40 @@ body {
 #sidebar {
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
     width: 30%;
     min-width: 300px;
     max-width: 450px;
     border-right: 1px solid var(--border-color);
     background-color: var(--dark-bg);
+}
+
+#sidebar-footer {
+    padding: 5px 16px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+#sidebar-footer button {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: var(--icon-color);
+    width: 40px;
+    height: 40px;
+    padding: 8px;
+    border-radius: 50%;
+    transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#sidebar-footer button:hover {
+    background-color: var(--hover-bg);
 }
 
 #main-content {
@@ -125,9 +154,14 @@ body {
     font-size: 20px;
     cursor: pointer;
     color: var(--icon-color);
+    width: 40px;
+    height: 40px;
     padding: 8px;
     border-radius: 50%;
     transition: background-color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .header-icons button:hover {
@@ -610,20 +644,6 @@ body {
 
 .modal-header h2 {
     margin: 0;
-}
-
-.reload-btn {
-    background: none;
-    border: none;
-    cursor: pointer;
-    color: var(--icon-color);
-    padding: 8px;
-    border-radius: 50%;
-    transition: background-color 0.2s;
-}
-
-.reload-btn:hover {
-    background-color: var(--hover-bg);
 }
 
 .metrics-chart-container {
