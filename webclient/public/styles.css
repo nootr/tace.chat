@@ -228,15 +228,6 @@ body {
     margin-left: 6px;
 }
 
-.last-message {
-    font-size: 14px;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 250px;
-}
-
 .unknown-badge {
     position: absolute;
     right: 12px;
