@@ -77,11 +77,11 @@
                     <div :style="{ backgroundColor: getPublicKeyColor(activeContact.publicKey) }" class="profile-pic-container" x-html="$refs.profileIcon.innerHTML"></div>
                     <div class="chat-info">
                         <div class="chat-name" x-text="activeContact.name"></div>
-                        <div class="chat-status" x-show="activeContact.name.startsWith('Unknown (')">
+                        <div class="chat-status">
                             Public key: <span x-text="`${activeContact.publicKey.substring(0, 16)}...`"></span>
                         </div>
                     </div>
-                    <div class="header-icons" x-show="activeContact.name.startsWith('Unknown (')">
+                    <div class="header-icons">
                         <button @click="renameContact(activeContact.id)" title="Rename Contact">
                             <svg viewBox="0 0 24 24" width="20" height="20">
                                 <path fill="currentColor" d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z"></path>
