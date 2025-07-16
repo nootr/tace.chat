@@ -529,10 +529,20 @@ body {
 }
 
 .modal-content label {
-    display: block;
     font-size: 14px;
     color: var(--text-secondary);
-    margin-bottom: 8px;
+}
+
+.disclaimer-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+.disclaimer-checkbox input[type="checkbox"] {
+    margin-bottom: 0;
+    width: auto;
 }
 
 .modal-content textarea {

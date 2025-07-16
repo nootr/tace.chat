@@ -142,6 +142,18 @@
     </div>
 
     <!-- Modals -->
+    <div class="modal-container" x-show="showDisclaimerModal" @click.self="attemptCloseDisclaimerModal()" style="display: none;">
+        <div class="modal-content">
+            <h2>Welcome to Tace Chat</h2>
+            <p>Please read <a href="https://github.com/nootr/tace.chat#disclaimer">the disclaimer</a> carefully before using Tace Chat.</p>
+            <div class="disclaimer-checkbox">
+                <input type="checkbox" id="disclaimer-checkbox" x-model="disclaimerChecked">
+                <label for="disclaimer-checkbox">I have read and understand the disclaimer.</label>
+            </div>
+            <button @click="attemptCloseDisclaimerModal()" :disabled="!disclaimerChecked">Continue</button>
+        </div>
+    </div>
+
     <div class="modal-container" x-show="settingsModalOpen" @click.self="settingsModalOpen = false" style="display: none;">
         <div class="modal-content">
             <span class="close-btn" @click="settingsModalOpen = false">&times;</span>

@@ -2,7 +2,6 @@ import init, { generate_keypair, encrypt, decrypt, sign } from '../webclient/pkg
 
 const bootstrapNode = '__BOOTSTRAP_NODE_URL__';
 
-// Helper to convert hex string to Uint8Array
 function hexToUint8Array(hexString) {
     if (hexString.length % 2 !== 0) {
         throw "Invalid hexString";
@@ -21,17 +20,17 @@ function hexToUint8Array(hexString) {
 document.addEventListener('alpine:init', () => {
     Alpine.data('app', function () {
         return {
-            // State
             keys: this.$persist({ private_key: '', public_key: '' }).as('tace_keys'),
             contacts: this.$persist([]).as('tace_contacts'),
             messages: this.$persist({}).as('tace_messages'),
             activeContactId: null,
             node: bootstrapNode,
 
-            // UI State
             settingsModalOpen: false,
             addContactModalOpen: false,
             metricsModalOpen: false,
+            showDisclaimerModal: this.$persist(true).as('tace_disclaimer_modal_open'),
+            disclaimerChecked: false,
             search: '',
             newMessage: '',
             newContact: { name: '', publicKey: '' },
@@ -42,49 +41,6 @@ document.addEventListener('alpine:init', () => {
             collectorUrl: '__COLLECTOR_URL__',
 
             // Init
-            async init() {
-                await init(); // Initialize WASM
-                await this.loadNodeUrl();
-                if (!this.keys.private_key || !this.keys.public_key) {
-                    console.log('No keys found, generating new ones...');
-                    const keypair = generate_keypair();
-                    this.keys = {
-                        private_key: keypair.private_key,
-                        public_key: keypair.public_key,
-                    };
-                    keypair.free();
-                }
-                this.startPolling();
-                console.log('App Initialized');
-
-                this.$watch('activeContactId', () => {
-                    this.$nextTick(() => {
-                        const chatWindow = document.getElementById('chat-window');
-                        if (chatWindow) {
-                            chatWindow.scrollTop = chatWindow.scrollHeight;
-                        }
-                    });
-                });
-
-                this.$watch('metricsModalOpen', (val) => {
-                    if (val) {
-                        this.$nextTick(() => {
-                            if (!this.metricsLoaded) {
-                                this.fetchMetrics();
-                                this.metricsLoaded = true;
-                            }
-                        });
-                    } else {
-                        // Stop polling and destroy chart when modal is closed
-                        if (this.metricsChart) {
-                            this.metricsChart.destroy();
-                            this.metricsChart = null;
-                        }
-                        // Reset the flag so fresh data is fetched next time
-                        this.metricsLoaded = false;
-                    }
-                });
-            },
 
             // Computed Properties
             get filteredContacts() {
@@ -285,6 +241,12 @@ document.addEventListener('alpine:init', () => {
 
             copyToClipboard(element) {
                 navigator.clipboard.writeText(element.value);
+            },
+
+            attemptCloseDisclaimerModal() {
+                if (this.disclaimerChecked) {
+                    this.showDisclaimerModal = false;
+                }
             },
 
             async fetchMetrics() {
