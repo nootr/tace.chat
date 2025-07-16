@@ -5,6 +5,7 @@ services:
       dockerfile: Dockerfile.webclient
       args:
         BOOTSTRAP_NODE_URL: node1:6345
+        COLLECTOR_URL: http://collector:8765
     ports:
       - "8081:80"
 

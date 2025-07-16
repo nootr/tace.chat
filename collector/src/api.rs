@@ -18,6 +18,7 @@ pub async fn metrics_api_handler(
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header(hyper::header::CONTENT_TYPE, "application/json")
+                .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*") // Add CORS header
                 .body(Full::new(Bytes::from(json_response)))
                 .unwrap())
         }

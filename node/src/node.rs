@@ -581,9 +581,9 @@ impl<T: NetworkClient> ChordNode<T> {
             (local_metrics.message_type_ratio + incoming_metrics.message_type_ratio) / 2.0;
 
         // Only gossip the estimated total network keys, not local key count
-        local_metrics.estimated_total_network_keys = (local_metrics.estimated_total_network_keys
-            + incoming_metrics.estimated_total_network_keys)
-            / 2;
+        local_metrics.total_network_keys_estimate = (local_metrics.total_network_keys_estimate
+            + incoming_metrics.total_network_keys_estimate)
+            / 2.0;
 
         // Average, bound, and smooth the network size estimate
         let new_raw_estimate =
@@ -694,9 +694,9 @@ impl<T: NetworkClient> ChordNode<T> {
         );
 
         // Periodically contribute local key count to network estimate using generalized function
-        local_metrics.estimated_total_network_keys = self.update_network_estimate_u64(
-            local_metrics.estimated_total_network_keys,
-            local_metrics.local_key_count,
+        local_metrics.total_network_keys_estimate = self.update_network_estimate_f64(
+            local_metrics.total_network_keys_estimate,
+            local_metrics.local_key_count as f64,
             local_metrics.network_size_estimate,
             0.1,   // contribution_factor: How much local data influences network estimate
             false, // apply_bounds: Key counts can vary widely, don't bound them
@@ -1018,27 +1018,6 @@ impl<T: NetworkClient> ChordNode<T> {
         } else {
             new_estimate
         }
-    }
-
-    /// Generalized network estimation for u64 values (like key counts)
-    fn update_network_estimate_u64(
-        &self,
-        current_estimate: u64,
-        local_value: u64,
-        network_size: f64,
-        contribution_factor: f64,
-        apply_bounds: bool,
-        smoothing_factor: f64,
-    ) -> u64 {
-        let result = self.update_network_estimate_f64(
-            current_estimate as f64,
-            local_value as f64,
-            network_size,
-            contribution_factor,
-            apply_bounds,
-            smoothing_factor,
-        );
-        result.max(0.0) as u64
     }
 
     pub async fn fix_fingers(&self) {
@@ -2157,7 +2136,7 @@ mod tests {
             local_metrics.operation_latency = std::time::Duration::from_millis(100);
             local_metrics.message_type_ratio = 0.6;
             local_metrics.local_key_count = 50;
-            local_metrics.estimated_total_network_keys = 50;
+            local_metrics.total_network_keys_estimate = 50.0;
             local_metrics.network_size_estimate = 10.0;
         }
 
@@ -2169,7 +2148,7 @@ mod tests {
             operation_latency: std::time::Duration::from_millis(200),
             message_type_ratio: 0.4,
             local_key_count: 30,
-            estimated_total_network_keys: 30,
+            total_network_keys_estimate: 30.0,
             network_size_estimate: 20.0,
         };
 
@@ -2185,7 +2164,7 @@ mod tests {
             std::time::Duration::from_millis(150)
         ); // (100 + 200) / 2
         assert_eq!(result_metrics.message_type_ratio, 0.5); // (0.6 + 0.4) / 2
-        assert_eq!(result_metrics.estimated_total_network_keys, 40); // (50 + 30) / 2
+        assert_eq!(result_metrics.total_network_keys_estimate, 40.0); // (50.0 + 30.0) / 2.0
 
         // Network size estimate should be bounded and smoothed, not just averaged
         assert!(result_metrics.network_size_estimate > 10.0);
@@ -2273,7 +2252,7 @@ mod tests {
             operation_latency: std::time::Duration::from_millis(150),
             message_type_ratio: 0.5,
             local_key_count: 25,
-            estimated_total_network_keys: 25,
+            total_network_keys_estimate: 25.0,
             network_size_estimate: 15.0,
         };
 
@@ -2299,7 +2278,7 @@ mod tests {
             local_metrics.operation_latency = std::time::Duration::from_millis(50);
             local_metrics.message_type_ratio = 0.7;
             local_metrics.local_key_count = 35;
-            local_metrics.estimated_total_network_keys = 35;
+            local_metrics.total_network_keys_estimate = 35.0;
             local_metrics.network_size_estimate = 5.0;
         }
 
@@ -2342,7 +2321,7 @@ mod tests {
             operation_latency: std::time::Duration::from_millis(500),
             message_type_ratio: 0.5,
             local_key_count: 50,
-            estimated_total_network_keys: 50,
+            total_network_keys_estimate: 50.0,
             network_size_estimate: 50.0,
         };
 
@@ -2368,7 +2347,7 @@ mod tests {
             local_metrics.operation_latency = std::time::Duration::from_millis(0);
             local_metrics.message_type_ratio = 1.0;
             local_metrics.local_key_count = 0;
-            local_metrics.estimated_total_network_keys = 0;
+            local_metrics.total_network_keys_estimate = 0.0;
             local_metrics.network_size_estimate = 1.0;
         }
 

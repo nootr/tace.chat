@@ -27,7 +27,7 @@ pub struct NetworkMetrics {
     pub local_key_count: u64,
 
     /// The total estimated number of key-value pairs stored across the entire network.
-    pub estimated_total_network_keys: u64,
+    pub total_network_keys_estimate: f64,
 
     /// The estimated number of nodes in the network.
     pub network_size_estimate: f64,
@@ -42,7 +42,7 @@ impl Default for NetworkMetrics {
             operation_latency: Duration::from_millis(0),
             message_type_ratio: 0.0,
             local_key_count: 0,
-            estimated_total_network_keys: 0,
+            total_network_keys_estimate: 0.0,
             network_size_estimate: 1.0,
         }
     }

@@ -4,7 +4,6 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use log::{error, info};
 use rusqlite::Connection;
-use serde_json;
 use std::sync::Arc;
 use tace_lib::metrics::NetworkMetrics;
 

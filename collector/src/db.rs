@@ -11,7 +11,7 @@ pub struct StoredNetworkMetrics {
     pub operation_latency_millis: u64,
     pub message_type_ratio: f64,
     pub local_key_count: u64,
-    pub estimated_total_network_keys: u64,
+    pub total_network_keys_estimate: f64,
     pub network_size_estimate: f64,
 }
 
@@ -26,7 +26,7 @@ pub fn init_db(db_path: &str) -> SqliteResult<Connection> {
             operation_latency_millis INTEGER,
             message_type_ratio REAL,
             local_key_count INTEGER,
-            estimated_total_network_keys INTEGER,
+            total_network_keys_estimate REAL,
             network_size_estimate REAL
         )",
         [],
@@ -39,7 +39,7 @@ pub fn insert_metrics(conn: &Connection, metrics: &NetworkMetrics) -> SqliteResu
         "INSERT INTO metrics (
             timestamp, node_churn_rate, routing_table_health, operation_success_rate,
             operation_latency_millis, message_type_ratio, local_key_count,
-            estimated_total_network_keys, network_size_estimate
+            total_network_keys_estimate, network_size_estimate
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             std::time::SystemTime::now()
@@ -52,7 +52,7 @@ pub fn insert_metrics(conn: &Connection, metrics: &NetworkMetrics) -> SqliteResu
             metrics.operation_latency.as_millis() as u64,
             metrics.message_type_ratio,
             metrics.local_key_count,
-            metrics.estimated_total_network_keys,
+            metrics.total_network_keys_estimate,
             metrics.network_size_estimate,
         ],
     )?;
@@ -71,7 +71,7 @@ pub fn get_latest_metrics(conn: &Connection) -> SqliteResult<Vec<StoredNetworkMe
                 operation_latency_millis: row.get(4)?,
                 message_type_ratio: row.get(5)?,
                 local_key_count: row.get(6)?,
-                estimated_total_network_keys: row.get(7)?,
+                total_network_keys_estimate: row.get(7)?,
                 network_size_estimate: row.get(8)?,
             })
         })?

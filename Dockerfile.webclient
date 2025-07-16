@@ -20,7 +20,9 @@ FROM nginx:1.27.0-alpine
 
 # Set bootstrap node URL
 ARG BOOTSTRAP_NODE_URL=bootstrap.tace.chat:6345
+ARG COLLECTOR_URL=http://collector:8765
 RUN echo "Bootstrap URL: $BOOTSTRAP_NODE_URL"
+RUN echo "Collector URL: $COLLECTOR_URL"
 
 # Remove default Nginx configuration
 RUN rm /etc/nginx/conf.d/default.conf
@@ -32,8 +34,9 @@ COPY webclient/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/webclient/pkg /usr/share/nginx/html/webclient/pkg
 COPY webclient/public /usr/share/nginx/html
 
-# Replace placeholder with bootstrap node URL
+# Replace placeholders with build arguments
 RUN sed -i "s|__BOOTSTRAP_NODE_URL__|${BOOTSTRAP_NODE_URL}|g" /usr/share/nginx/html/main.js
+RUN sed -i "s|__COLLECTOR_URL__|${COLLECTOR_URL}|g" /usr/share/nginx/html/main.js
 
 EXPOSE 80
 

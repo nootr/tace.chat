@@ -31,10 +31,15 @@ document.addEventListener('alpine:init', () => {
             // UI State
             settingsModalOpen: false,
             addContactModalOpen: false,
+            metricsModalOpen: false,
             search: '',
             newMessage: '',
             newContact: { name: '', publicKey: '' },
             isPolling: false,
+            metricsLoaded: false,
+
+            // Collector URL - will be replaced by Dockerfile during build
+            collectorUrl: '__COLLECTOR_URL__',
 
             // Init
             async init() {
@@ -59,6 +64,25 @@ document.addEventListener('alpine:init', () => {
                             chatWindow.scrollTop = chatWindow.scrollHeight;
                         }
                     });
+                });
+
+                this.$watch('metricsModalOpen', (val) => {
+                    if (val) {
+                        this.$nextTick(() => {
+                            if (!this.metricsLoaded) {
+                                this.fetchMetrics();
+                                this.metricsLoaded = true;
+                            }
+                        });
+                    } else {
+                        // Stop polling and destroy chart when modal is closed
+                        if (this.metricsChart) {
+                            this.metricsChart.destroy();
+                            this.metricsChart = null;
+                        }
+                        // Reset the flag so fresh data is fetched next time
+                        this.metricsLoaded = false;
+                    }
                 });
             },
 
@@ -234,6 +258,81 @@ document.addEventListener('alpine:init', () => {
 
             copyToClipboard(element) {
                 navigator.clipboard.writeText(element.value);
+            },
+
+            async fetchMetrics() {
+                try {
+                    console.log(`Fetching metrics from: ${this.collectorUrl}/metrics`);
+                    const response = await fetch(`${this.collectorUrl}/metrics`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const data = await response.json();
+                    console.log('Fetched metrics data:', data);
+                    this.metricsData = data;
+                    this.renderChart();
+                } catch (e) {
+                    console.error("Failed to fetch metrics:", e);
+                    // Optionally, display an error message in the modal
+                }
+            },
+
+            renderChart() {
+                if (!this.metricsData || this.metricsData.length === 0) {
+                    console.log('No metrics data to render or data is empty.', this.metricsData);
+                    if (this.metricsChart) {
+                        this.metricsChart.destroy();
+                        this.metricsChart = null;
+                    }
+                    return;
+                }
+
+                const reversedMetricsData = [...this.metricsData].reverse();
+                const ctx = this.$refs.metricsCanvas.getContext('2d');
+
+                if (this.metricsChart) {
+                    this.metricsChart.destroy();
+                }
+
+                const labels = reversedMetricsData.map(m => new Date(m.timestamp * 1000).toLocaleTimeString());
+                const nodeCountData = reversedMetricsData.map(m => m.network_size_estimate);
+                const totalMessagesData = reversedMetricsData.map(m => m.total_network_keys_estimate);
+
+                console.log('Rendering chart with labels:', labels);
+                console.log('Node Count Data:', nodeCountData);
+                console.log('Total Messages Data:', totalMessagesData);
+
+                this.metricsChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Node Count',
+                                data: nodeCountData,
+                                borderColor: 'rgb(75, 192, 192)',
+                                tension: 0.1,
+                                fill: false
+                            },
+                            {
+                                label: 'Total Messages',
+                                data: totalMessagesData,
+                                borderColor: 'rgb(255, 99, 132)',
+                                tension: 0.1,
+                                fill: false
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
+                        }
+                    }
+                });
             },
 
             startPolling() {
