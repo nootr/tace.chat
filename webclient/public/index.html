@@ -83,10 +83,33 @@
             </template>
             <div id="chat-window">
                 <template x-if="!activeContact">
-                    <div class="no-chat-selected">
-                        <div :style="{ backgroundColor: getPublicKeyColor(null) }" class="logo-large-container" x-html="$refs.profileIcon.innerHTML"></div>
-                        <h1>Tace Chat</h1>
-                        <p>Select a chat to start messaging.</p>
+                    <div class="welcome-screen">
+                        <h1>Welcome to Tace Chat</h1>
+                        <p class="tagline">Secure, decentralized messaging that respects your privacy.</p>
+                        <div class="features">
+                            <div class="feature">
+                                <div class="feature-icon">
+                                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1Z" /></svg>
+                                </div>
+                                <h3>End-to-End Encryption</h3>
+                                <p>Your messages are secured with strong cryptography. Only you and your recipient can read them.</p>
+                            </div>
+                            <div class="feature">
+                                <div class="feature-icon">
+                                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M3,12A3,3 0 0,1 6,9A3,3 0 0,1 9,12A3,3 0 0,1 6,15A3,3 0 0,1 3,12M13,6A2,2 0 0,1 15,4A2,2 0 0,1 17,6A2,2 0 0,1 15,8A2,2 0 0,1 13,6M11,18A4,4 0 0,1 15,14A4,4 0 0,1 19,18A4,4 0 0,1 15,22A4,4 0 0,1 11,18" /></svg>
+                                </div>
+                                <h3>Decentralized Network</h3>
+                                <p>Tace Chat is powered by a peer-to-peer network, eliminating the need for central servers.</p>
+                            </div>
+                            <div class="feature">
+                                <div class="feature-icon">
+                                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1Z" /></svg>
+                                </div>
+                                <h3>Private & Anonymous</h3>
+                                <p>Your identity is your public key. No phone numbers or emails required.</p>
+                            </div>
+                        </div>
+                        <p class="call-to-action">To get started, add a contact using their public key.</p>
                     </div>
                 </template>
                 <template x-if="activeContact">
