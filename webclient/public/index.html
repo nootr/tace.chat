@@ -36,7 +36,7 @@
                     </button>
                     <button @click="metricsModalOpen = true" title="View Metrics">
                         <svg viewBox="0 0 24 24" width="24" height="24">
-                            <path fill="currentColor" d="M16,11.78L19.59,15.37L18.18,16.78L16,14.56L13.82,16.78L12.41,15.37L16,11.78M16,6L10,12L16,18L22,12M6,18H2V6H6V18Z"></path>
+                            <path fill="currentColor" d="M4,9H8V18H4V9M10,4H14V18H10V4M16,13H20V18H16V13Z"></path>
                         </svg>
                     </button>
                     <button @click="settingsModalOpen = true" title="Settings">
@@ -111,7 +111,7 @@
                                 <p>Your identity is your public key. No phone numbers or emails required.</p>
                             </div>
                         </div>
-                        <p class="call-to-action">To get started, add a contact using their public key.</p>
+                        <p class="call-to-action">Share your public key to get started.</p>
                     </div>
                 </template>
                 <template x-if="activeContact">
@@ -142,10 +142,6 @@
             <span class="close-btn" @click="settingsModalOpen = false">&times;</span>
             <h2>Settings</h2>
             <div class="setting-item">
-                <h3>Network information</h3>
-                <p>Current node connection: <span x-text="node"></span></p>
-            </div>
-            <div class="setting-item">
                 <h3>Your Public Key</h3>
                 <p>Share this with your contacts so they can message you.</p>
                 <textarea x-ref="userPublicKey" readonly x-text="keys.public_key"></textarea>
@@ -168,21 +164,24 @@
         </div>
     </div>
 
-    <!-- Metrics Modal -->
     <div class="modal-container" x-show="metricsModalOpen" @click.self="metricsModalOpen = false" style="display: none;">
         <div class="modal-content">
             <span class="close-btn" @click="metricsModalOpen = false">&times;</span>
             <div class="modal-header">
                 <h2>Node Metrics</h2>
-                <button @click="fetchMetrics()" class="reload-btn" title="Reload Metrics">
-                    <svg viewBox="0 0 24 24" width="24" height="24">
-                        <path fill="currentColor" d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
-                    </svg>
-                </button>
             </div>
-            <div style="width: 100%; height: 400px;">
+            <div class="metrics-chart-container">
                 <canvas id="metricsChart" x-ref="metricsCanvas"></canvas>
             </div>
+            <div>
+                <h3>Current node connection</h3>
+                <pre x-text="`http://${node}`"></pre>
+            </div>
+            <button @click="fetchMetrics()" class="reload-btn" title="Reload Metrics">
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                    <path fill="currentColor" d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
+                </svg>
+            </button>
         </div>
     </div>
 </body>
