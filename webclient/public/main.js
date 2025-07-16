@@ -88,10 +88,20 @@ document.addEventListener('alpine:init', () => {
 
             // Computed Properties
             get filteredContacts() {
-                if (!this.search) return this.contacts;
-                return this.contacts.filter(contact =>
-                    contact.name.toLowerCase().includes(this.search.toLowerCase())
-                );
+                const searchLower = this.search.toLowerCase();
+                const filtered = this.search
+                    ? this.contacts.filter(c => c.name.toLowerCase().includes(searchLower))
+                    : [...this.contacts];
+
+                return filtered.sort((a, b) => {
+                    const lastMsgA = this.messages[a.id]?.slice(-1)[0];
+                    const lastMsgB = this.messages[b.id]?.slice(-1)[0];
+
+                    const timeA = lastMsgA ? new Date(lastMsgA.timestamp).getTime() : 0;
+                    const timeB = lastMsgB ? new Date(lastMsgB.timestamp).getTime() : 0;
+
+                    return timeB - timeA;
+                });
             },
 
             get activeContact() {
@@ -250,10 +260,27 @@ document.addEventListener('alpine:init', () => {
                 }
             },
 
-            getLastMessage(contactId) {
+            getLastMessageTime(contactId) {
                 const contactMessages = this.messages[contactId];
-                if (!contactMessages || contactMessages.length === 0) return 'No messages yet...';
-                return 'Encrypted message';
+                if (!contactMessages || contactMessages.length === 0) {
+                    return 'No messages yet...';
+                }
+                const lastMsg = contactMessages[contactMessages.length - 1];
+                const msgDate = new Date(lastMsg.timestamp);
+                const now = new Date();
+
+                if (msgDate.toDateString() === now.toDateString()) {
+                    return msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                } else {
+                    // Check if it was yesterday
+                    const yesterday = new Date(now);
+                    yesterday.setDate(now.getDate() - 1);
+                    if (msgDate.toDateString() === yesterday.toDateString()) {
+                        return 'Yesterday';
+                    }
+                    // Otherwise, show the date
+                    return msgDate.toLocaleDateString();
+                }
             },
 
             copyToClipboard(element) {
