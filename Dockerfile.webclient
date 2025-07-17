@@ -1,19 +1,14 @@
 FROM rust:1.88.0 AS builder
 
-WORKDIR /app
+# Copy all files and set the working directory
+COPY . /app
+WORKDIR /app/webclient
 
 # Install wasm-pack
 RUN cargo install wasm-pack
 
-# Copy necessary files for building
-COPY Cargo.toml .
-COPY lib lib
-COPY node node
-COPY collector collector
-COPY webclient webclient
-
 # Build the webclient
-RUN wasm-pack build webclient --target web --release
+RUN wasm-pack build --target web --out-dir public/pkg --release
 
 # Stage 2: Serve with Nginx
 FROM nginx:1.27.0-alpine
@@ -28,11 +23,10 @@ RUN echo "Collector URL: $COLLECTOR_URL"
 RUN rm /etc/nginx/conf.d/default.conf
 
 # Copy custom Nginx configuration
-COPY webclient/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/webclient/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy built webclient and all public assets
-COPY --from=builder /app/webclient/pkg /usr/share/nginx/html/webclient/pkg
-COPY webclient/public /usr/share/nginx/html
+# Copy all public assets from the builder stage
+COPY --from=builder /app/webclient/public/ /usr/share/nginx/html/
 
 # Replace placeholders with build arguments
 RUN sed -i "s|__BOOTSTRAP_NODE_URL__|${BOOTSTRAP_NODE_URL}|g" /usr/share/nginx/html/main.js
