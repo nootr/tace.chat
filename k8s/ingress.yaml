@@ -9,16 +9,6 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-  - host: bootstrap.tace.chat
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: tace-node-api
-            port:
-              number: 6345
   - host: metrics.tace.chat
     http:
       paths:
@@ -31,6 +21,5 @@ spec:
               number: 8000
   tls:
   - hosts:
-    - bootstrap.tace.chat
     - metrics.tace.chat
     secretName: tace-chat-tls
