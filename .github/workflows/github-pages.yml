@@ -24,6 +24,11 @@ jobs:
     - name: Build webclient
       run: wasm-pack build --target web --out-dir webclient/public/webclient/pkg webclient
 
+    - name: Replace URLs
+      run: |
+        sed -i 's|__BOOTSTRAP_NODE_URL__|bootstrap.tace.chat:6345|g' webclient/public/main.js
+        sed -i 's|__COLLECTOR_URL__|https://metrics.tace.chat|g' webclient/public/main.js
+
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
       with:
