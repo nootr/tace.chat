@@ -1,0 +1,15 @@
+{
+  "name": "tace_webclient",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "tace_webclient_bg.wasm",
+    "tace_webclient.js",
+    "tace_webclient.d.ts"
+  ],
+  "main": "tace_webclient.js",
+  "types": "tace_webclient.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
