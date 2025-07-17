@@ -1,0 +1,36 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tace-ingress
+  namespace: tace-chat
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.middlewares: default-redirect-https@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+  - host: bootstrap.tace.chat
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tace-node-api
+            port:
+              number: 6345
+  - host: metrics.tace.chat
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tace-collector
+            port:
+              number: 8000
+  tls:
+  - hosts:
+    - bootstrap.tace.chat
+    - metrics.tace.chat
+    secretName: tace-chat-tls

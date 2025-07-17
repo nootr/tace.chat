@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tace-collector
+  namespace: tace-chat
+  labels:
+    app: tace-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tace-collector
+  template:
+    metadata:
+      labels:
+        app: tace-collector
+    spec:
+      containers:
+      - name: tace-collector
+        image: ${DOCKER_USERNAME}/tace-collector:${GITHUB_REF_NAME}
+        ports:
+        - containerPort: 8000
+        env:
+        - name: SQLITE_DB_PATH
+          value: /data/tace.db
+        volumeMounts:
+        - name: collector-db
+          mountPath: /data
+      volumes:
+      - name: collector-db
+        persistentVolumeClaim:
+          claimName: collector-db-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tace-collector
+  namespace: tace-chat
+spec:
+  selector:
+    app: tace-collector
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
