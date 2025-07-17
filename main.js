@@ -1,4 +1,4 @@
-import init, { generate_keypair, encrypt, decrypt, sign } from '../webclient/pkg/tace_webclient.js';
+import init, { generate_keypair, encrypt, decrypt, sign } from './pkg/tace_webclient.js';
 
 const bootstrapNode = 'bootstrap.tace.chat:6345';
 
