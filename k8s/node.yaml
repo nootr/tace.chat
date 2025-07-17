@@ -21,6 +21,8 @@ spec:
         env:
         - name: ADVERTISE_HOST
           value: bootstrap.tace.chat
+        - name: IS_BOOTSTRAP
+          value: "true"
         ports:
         - containerPort: 6345
           name: api
