@@ -1,6 +1,6 @@
 import init, { generate_keypair, encrypt, decrypt, sign } from '../webclient/pkg/tace_webclient.js';
 
-const bootstrapNode = '__BOOTSTRAP_NODE_URL__';
+const bootstrapNode = 'bootstrap.tace.chat:6345';
 
 function hexToUint8Array(hexString) {
     if (hexString.length % 2 !== 0) {
@@ -38,7 +38,7 @@ document.addEventListener('alpine:init', () => {
             metricsLoaded: false,
 
             // Collector URL - will be replaced by Dockerfile during build
-            collectorUrl: '__COLLECTOR_URL__',
+            collectorUrl: 'https://metrics.tace.chat',
 
             init() {
                 this.$watch('showTermsModal', async (val) => {
