@@ -18,6 +18,9 @@ spec:
       containers:
       - name: tace-node
         image: ${DOCKER_USERNAME}/tace-node:${GITHUB_REF_NAME}
+        env:
+        - name: ADVERTISE_HOST
+          value: bootstrap.tace.chat
         ports:
         - containerPort: 6345
           name: api
