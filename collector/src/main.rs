@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let bootstrap_node_api_url = std::env::var("BOOTSTRAP_NODE_API_URL")
-        .unwrap_or_else(|_| "http://bootstrap.tace.chat:6345".to_string());
+        .unwrap_or_else(|_| "http://bootstrap.tace.chat:80".to_string());
     let collector_bind_address =
         std::env::var("COLLECTOR_BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:8000".to_string());
     let metrics_fetch_interval_secs: u64 = std::env::var("METRICS_FETCH_INTERVAL_SECS")

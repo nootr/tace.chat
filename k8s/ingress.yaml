@@ -19,7 +19,18 @@ spec:
             name: tace-collector
             port:
               number: 8000
+  - host: bootstrap.tace.chat
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tace-node-api
+            port:
+              name: api
   tls:
   - hosts:
     - metrics.tace.chat
+    - bootstrap.tace.chat
     secretName: tace-chat-tls

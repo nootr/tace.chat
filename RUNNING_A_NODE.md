@@ -1,70 +1,109 @@
 # How to Run a tace.chat Node
 
-Running a `tace.chat` node is a lightweight and effective way to support the network's decentralization and censorship-resistance. This guide explains how to run a standalone node using Docker.
+Running a `tace.chat` node is a lightweight and effective way to support the network's decentralization and censorship-resistance. This guide explains how to run a standalone node.
+
+For production or scalable deployments, we suggest using Kubernetes. For a simpler setup on a single server, you can use Docker Compose.
 
 ## Prerequisites
 
-- [Docker](https://www.docker.com/get-started) installed on your system.
-- A publicly accessible IP address or domain name.
+- A publicly accessible server with a domain name pointing to it (e.g., `node.yourdomain.com`).
+- [Docker](https://www.docker.com/get-started) and [Docker Compose](https://docs.docker.com/compose/install/) installed on your system if using the Docker-based setup.
 
-## System Requirements
+## Option 1: Kubernetes
 
-The `tace.chat` node is designed to be lightweight.
+For scalable or resilient deployments, a good method is to run a `tace.chat` node on a Kubernetes cluster. We provide example manifests to help you get started.
 
--   **Memory**: 256MB of RAM is recommended. The node itself uses a small amount of memory, with a default 100MB in-memory queue for messages.
--   **CPU**: A single CPU core is sufficient.
--   **Disk Space**: Less than 200MB for the Docker image and log files.
--   **Network**: A stable internet connection with a public IP address and open ports for P2P and API communication.
+The manifests for running a node are in the [k8s/](./k8s/) directory. Note that this directory also contains files for other components, like the `collector`, which are not needed for running a node.
 
-## Running a Standalone Node with Docker
+## Option 2: Docker Compose & Traefik (Simple Setup)
 
-These instructions are for running a single, public-facing node that can join the main `tace.chat` network.
+This method provides a simple way to run a public-facing node on a single server. It uses Traefik as a reverse proxy to automatically provision and renew Let's Encrypt SSL certificates, enabling secure HTTPS for your node's API.
 
-### 1. Build the Docker Image
+### 1. Create a `docker-compose.yml` file
 
-First, clone the repository and build the Docker image for the node.
+Create a file named `docker-compose.yml` and paste the following content into it:
 
-```bash
-git clone https://github.com/nootr/tace.chat.git
-cd tace.chat
-docker build -t tace-node -f Dockerfile.node .
+```yaml
+version: '3.8'
+
+services:
+  tace-node:
+    image: nootr/tace-node:latest # Use the official pre-built image
+    container_name: tace-node
+    restart: unless-stopped
+    environment:
+      - ADVERTISE_HOST=<YOUR_DOMAIN> # e.g., node.yourdomain.com
+      - NODE_PORT=6512
+      - API_PORT=80
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.tace-node.rule=Host(`
+`)" # e.g., Host(`node.yourdomain.com`)
+      - "traefik.http.routers.tace-node.entrypoints=websecure"
+      - "traefik.http.routers.tace-node.tls.certresolver=myresolver"
+      - "traefik.http.services.tace-node.loadbalancer.server.port=80"
+      # Also expose the P2P port via a TCP router
+      - "traefik.tcp.routers.tace-p2p.rule=HostSNI(`*`)"
+      - "traefik.tcp.routers.tace-p2p.entrypoints=tace-p2p"
+      - "traefik.tcp.services.tace-p2p.loadbalancer.server.port=6512"
+
+  traefik:
+    image: "traefik:v2.5"
+    container_name: "traefik"
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.tace-p2p.address=:6512" # Entrypoint for the P2P port
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=<YOUR_EMAIL>" # e.g., you@yourdomain.com
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "6512:6512"
+      - "8080:8080" # For Traefik dashboard
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - web
+
+networks:
+  web:
+    driver: bridge
 ```
 
-### 2. Run the Node
+### 2. Configure and Run
 
-To run the node, you need to configure its public address and expose the correct ports. The node uses the following default ports:
+1.  **Replace Placeholders**: In the `docker-compose.yml` file, replace `<YOUR_DOMAIN>` with your actual domain and `<YOUR_EMAIL>` with your email address for the SSL certificate.
+2.  **Create Certificate Storage**: Create the file for storing the SSL certificate and set the correct permissions.
+    ```bash
+    mkdir letsencrypt
+    touch letsencrypt/acme.json
+    chmod 600 letsencrypt/acme.json
+    ```
+3.  **Start the Services**: Launch the node and Traefik.
+    ```bash
+    docker-compose up -d
+    ```
 
--   **`6345/tcp`**: For the client API.
--   **`6512/tcp`**: For P2P communication with other nodes.
+Traefik will now handle incoming traffic, route it to your node, and automatically manage your SSL certificate.
 
-```bash
-docker run -d \
-  -p 6345:6345/tcp \
-  -p 6512:6512/tcp \
-  -e ADVERTISE_HOST="<your_public_domain_or_ip>" \
-  --name tace-node \
-  tace-node
-```
+## Verifying Your Node
 
-### Example
-
-If your server's IP is `203.0.113.42`, the command would be:
-
-```bash
-docker run -d \
-  -p 6345:6345/tcp \
-  -p 6512:6512/tcp \
-  -e ADVERTISE_HOST="203.0.113.42" \
-  --name tace-node \
-  tace-node
-```
-
-### 3. Verifying Your Node
-
-You can check the logs to ensure your node started correctly and connected to the network.
+You can check the logs to ensure your node started correctly and connected to the network. If you are using the Docker Compose setup, you can run:
 
 ```bash
-docker logs tace-node
+docker logs tce-node
 ```
 
 You should see log entries indicating that the node has started, joined the network, and is stabilizing.
+
+```

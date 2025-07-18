@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tace-node
+  namespace: tace-chat
+  labels:
+    app: tace-node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tace-node
+  template:
+    metadata:
+      labels:
+        app: tace-node
+    spec:
+      containers:
+      - name: tace-node
+        image: ${DOCKER_USERNAME}/tace-node:${GITHUB_REF_NAME}
+        ports:
+        - name: api
+          containerPort: 80
+        - name: p2p
+          containerPort: 6512
+        env:
+        - name: ADVERTISE_HOST
+          value: "bootstrap.tace.chat"
+        - name: NODE_PORT
+          value: "6512"
+        - name: API_PORT
+          value: "80"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tace-node-api
+  namespace: tace-chat
+spec:
+  selector:
+    app: tace-node
+  ports:
+    - name: api
+      protocol: TCP
+      port: 80
+      targetPort: api
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tace-node-p2p
+  namespace: tace-chat
+spec:
+  selector:
+    app: tace-node
+  ports:
+    - name: p2p
+      protocol: TCP
+      port: 6512
+      targetPort: p2p
+  type: LoadBalancer # Or NodePort, depending on your setup

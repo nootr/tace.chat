@@ -20,7 +20,7 @@ async fn main() {
         .expect("BIND_PORT must be a valid integer");
     let api_host = env::var("API_HOST").unwrap_or_else(|_| advertise_host.clone());
     let api_port: u16 = env::var("API_PORT")
-        .unwrap_or_else(|_| "6345".to_string())
+        .unwrap_or_else(|_| "80".to_string())
         .parse()
         .expect("BIND_PORT must be a valid integer");
     let is_bootstrap = env::var("IS_BOOTSTRAP")

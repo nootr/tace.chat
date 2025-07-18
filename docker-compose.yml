@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.webclient
       args:
-        BOOTSTRAP_NODE_URL: node1:6345
+        BOOTSTRAP_NODE_URL: node1:80
         COLLECTOR_URL: http://collector:8765
     ports:
       - "8081:80"
@@ -14,17 +14,17 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "6345:6345"
+      - "8080:80"
       - "6512:6512"
     environment:
       - RUST_LOG=debug
       - ADVERTISE_HOST=node1
       - IS_BOOTSTRAP=true
       - NODE_PORT=6512
-      - API_PORT=6345
+      - API_PORT=80
       - STABILIZATION_INTERVAL=1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6345/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -34,20 +34,20 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "6346:6346"
+      - "8081:80"
       - "6513:6513"
     environment:
       - RUST_LOG=debug
       - ADVERTISE_HOST=node2
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6513
-      - API_PORT=6346
+      - API_PORT=80
       - STABILIZATION_INTERVAL=1
     depends_on:
       node1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6346/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -57,20 +57,20 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "6347:6347"
+      - "8082:80"
       - "6514:6514"
     environment:
       - RUST_LOG=debug
       - ADVERTISE_HOST=node3
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6514
-      - API_PORT=6347
+      - API_PORT=80
       - STABILIZATION_INTERVAL=1
     depends_on:
       node2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6347/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -80,20 +80,20 @@ services:
       context: .
       dockerfile: Dockerfile.node
     ports:
-      - "6348:6348"
+      - "8083:80"
       - "6515:6515"
     environment:
       - RUST_LOG=debug
       - ADVERTISE_HOST=node4
       - BOOTSTRAP_ADDRESS=node1:6512
       - NODE_PORT=6515
-      - API_PORT=6348
+      - API_PORT=80
       - STABILIZATION_INTERVAL=1
     depends_on:
       node3:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6348/ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -105,11 +105,11 @@ services:
     ports:
       - "8765:8765"
     environment:
-      - RUST_LOG=info
-      - BOOTSTRAP_NODE_API_URL=http://node1:6345
-      - COLLECTOR_BIND_ADDRESS=0.0.0.0:8765
-      - METRICS_FETCH_INTERVAL_SECS=5
-      - SQLITE_DB_PATH=/app/data/metrics.sqlite
+      - RUST_LOG: info
+      - BOOTSTRAP_NODE_API_URL: http://node1:80
+      - COLLECTOR_BIND_ADDRESS: 0.0.0.0:8765
+      - METRICS_FETCH_INTERVAL_SECS: 5
+      - SQLITE_DB_PATH: /app/data/metrics.sqlite
     depends_on:
       node1:
         condition: service_healthy
