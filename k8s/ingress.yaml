@@ -26,11 +26,22 @@ spec:
         pathType: Prefix
         backend:
           service:
-            name: tace-node-api
+            name: tace-node-bootstrap-api
+            port:
+              name: api
+  - host: pip.tace.chat
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tace-node-pip-api
             port:
               name: api
   tls:
   - hosts:
     - metrics.tace.chat
     - bootstrap.tace.chat
+    - pip.tace.chat
     secretName: tace-chat-tls

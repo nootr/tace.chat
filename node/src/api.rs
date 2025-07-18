@@ -429,7 +429,7 @@ pub async fn run<T: NetworkClient + Send + Sync + 'static>(
     let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(addr).await?;
 
-    info!("API is listening on http://{}", addr);
+    info!("API is listening on {}", addr);
     loop {
         let (tcp, _) = listener.accept().await?;
         let io = TokioIo::new(tcp);

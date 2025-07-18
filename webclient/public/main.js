@@ -1,6 +1,9 @@
 import init, { generate_keypair, encrypt, decrypt, sign } from './pkg/tace_webclient.js';
 
 const bootstrapNode = '__BOOTSTRAP_NODE_URL__';
+const apiProtocol = '__API_PROTOCOL__';
+
+const collectorUrl = '__COLLECTOR_URL__';
 
 function hexToUint8Array(hexString) {
     if (hexString.length % 2 !== 0) {
@@ -36,9 +39,6 @@ document.addEventListener('alpine:init', () => {
             newContact: { name: '', publicKey: '' },
             isPolling: false,
             metricsLoaded: false,
-
-            // Collector URL - will be replaced by Dockerfile during build
-            collectorUrl: '__COLLECTOR_URL__',
 
             init() {
                 this.$watch('showTermsModal', async (val) => {
@@ -126,7 +126,7 @@ document.addEventListener('alpine:init', () => {
             },
 
             async apiRequest(path, options = {}, retries = 1) {
-                const url = `http://${this.node}${path}`;
+                const url = `${apiProtocol}://${this.node}${path}`;
                 try {
                     const response = await fetch(url, options);
                     if (!response.ok) {
@@ -156,7 +156,7 @@ document.addEventListener('alpine:init', () => {
             async fetchNewNode() {
                 console.log('Fetching a new node from bootstrap:', bootstrapNode);
                 try {
-                    const response = await fetch(`http://${bootstrapNode}/connect`);
+                    const response = await fetch(`${apiProtocol}://${bootstrapNode}/connect`);
                     const data = await response.json();
                     if (data && data.node) {
                         this.node = data.node;
@@ -306,8 +306,8 @@ document.addEventListener('alpine:init', () => {
 
             async fetchMetrics() {
                 try {
-                    console.log(`Fetching metrics from: ${this.collectorUrl}/metrics`);
-                    const response = await fetch(`${this.collectorUrl}/metrics`);
+                    console.log(`Fetching metrics from: ${collectorUrl}/metrics`);
+                    const response = await fetch(`${collectorUrl}/metrics`);
                     if (!response.ok) {
                         throw new Error(`HTTP error! status: ${response.status}`);
                     }

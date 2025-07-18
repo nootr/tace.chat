@@ -1,19 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: tace-node
+  name: tace-node-bootstrap
   namespace: tace-chat
   labels:
-    app: tace-node
+    app: tace-node-bootstrap
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: tace-node
+      app: tace-node-bootstrap
   template:
     metadata:
       labels:
-        app: tace-node
+        app: tace-node-bootstrap
     spec:
       containers:
       - name: tace-node
@@ -24,8 +24,12 @@ spec:
         - name: p2p
           containerPort: 6512
         env:
+        - name: RUST_LOG
+          value: "info"
         - name: ADVERTISE_HOST
           value: "bootstrap.tace.chat"
+        - name: IS_BOOTSTRAP
+          value: "true"
         - name: NODE_PORT
           value: "6512"
         - name: API_PORT
@@ -34,11 +38,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: tace-node-api
+  name: tace-node-bootstrap-api
   namespace: tace-chat
 spec:
   selector:
-    app: tace-node
+    app: tace-node-bootstrap
   ports:
     - name: api
       protocol: TCP
@@ -49,14 +53,81 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: tace-node-p2p
+  name: tace-node-bootstrap-p2p
   namespace: tace-chat
 spec:
   selector:
-    app: tace-node
+    app: tace-node-bootstrap
   ports:
     - name: p2p
       protocol: TCP
       port: 6512
       targetPort: p2p
-  type: LoadBalancer # Or NodePort, depending on your setup
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tace-node-pip
+  namespace: tace-chat
+  labels:
+    app: tace-node-pip
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tace-node-pip
+  template:
+    metadata:
+      labels:
+        app: tace-node-pip
+    spec:
+      containers:
+      - name: tace-node
+        image: ${DOCKER_USERNAME}/tace-node:${GITHUB_REF_NAME}
+        ports:
+        - name: api
+          containerPort: 80
+        - name: p2p
+          containerPort: 6513
+        env:
+        - name: RUST_LOG
+          value: "info"
+        - name: ADVERTISE_HOST
+          value: "pip.tace.chat"
+        - name: BOOTSTRAP_ADDRESS
+          value: "bootstrap.tace.chat:6512"
+        - name: NODE_PORT
+          value: "6513"
+        - name: API_PORT
+          value: "80"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tace-node-pip-api
+  namespace: tace-chat
+spec:
+  selector:
+    app: tace-node-pip
+  ports:
+    - name: api
+      protocol: TCP
+      port: 80
+      targetPort: api
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tace-node-pip-p2p
+  namespace: tace-chat
+spec:
+  selector:
+    app: tace-node-pip
+  ports:
+    - name: p2p
+      protocol: TCP
+      port: 6513
+      targetPort: p2p
+  type: LoadBalancer
