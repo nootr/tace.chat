@@ -86,7 +86,6 @@ document.addEventListener('alpine:init', () => {
                     keypair.free();
                 }
                 this.startPolling();
-                console.log('App Initialized');
             },
 
             // Computed Properties
@@ -112,6 +111,11 @@ document.addEventListener('alpine:init', () => {
             },
 
             // Methods
+            getUrl(path = '', node = null) {
+                node = node || this.node;
+                return `${apiProtocol}://${node}${path}`;
+            },
+
             getPublicKeyColor(publicKey) {
                 if (!publicKey) {
                     return '#ccc'; // Default color for placeholders
@@ -126,7 +130,7 @@ document.addEventListener('alpine:init', () => {
             },
 
             async apiRequest(path, options = {}, retries = 1) {
-                const url = `${apiProtocol}://${this.node}${path}`;
+                const url = this.getUrl(path);
                 try {
                     const response = await fetch(url, options);
                     if (!response.ok) {
@@ -156,7 +160,7 @@ document.addEventListener('alpine:init', () => {
             async fetchNewNode() {
                 console.log('Fetching a new node from bootstrap:', bootstrapNode);
                 try {
-                    const response = await fetch(`${apiProtocol}://${bootstrapNode}/connect`);
+                    const response = await fetch(this.getUrl('/connect', bootstrapNode));
                     const data = await response.json();
                     if (data && data.node) {
                         this.node = data.node;
@@ -341,10 +345,6 @@ document.addEventListener('alpine:init', () => {
                 const labels = reversedMetricsData.map(m => new Date(m.timestamp * 1000).toLocaleTimeString());
                 const nodeCountData = reversedMetricsData.map(m => m.network_size_estimate);
                 const totalMessagesData = reversedMetricsData.map(m => m.total_network_keys_estimate);
-
-                console.log('Rendering chart with labels:', labels);
-                console.log('Node Count Data:', nodeCountData);
-                console.log('Total Messages Data:', totalMessagesData);
 
                 this.metricsChart = new Chart(ctx, {
                     type: 'line',
