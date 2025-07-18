@@ -32,8 +32,7 @@ async fn main() {
         .expect("ADVERTISE_P2P_PORT must be a valid integer");
 
     // API Configuration
-    let bind_api_host = env::var("BIND_API_HOST")
-        .unwrap_or_else(|_| "0.0.0.0".to_string());
+    let bind_api_host = env::var("BIND_API_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let bind_api_port: u16 = env::var("BIND_API_PORT")
         .or_else(|_| env::var("API_PORT"))
         .unwrap_or_else(|_| "80".to_string())
@@ -66,8 +65,14 @@ async fn main() {
     let advertise_p2p_address = format!("{}:{}", advertise_p2p_host, advertise_p2p_port);
     let advertise_api_address = format!("{}:{}", advertise_api_host, advertise_api_port);
 
-    let node =
-        Arc::new(ChordNode::new(advertise_p2p_address, advertise_api_address, Arc::new(RealNetworkClient)).await);
+    let node = Arc::new(
+        ChordNode::new(
+            advertise_p2p_address,
+            advertise_api_address,
+            Arc::new(RealNetworkClient),
+        )
+        .await,
+    );
 
     let node_for_api = node.clone();
     let bind_api_host_clone = bind_api_host.clone();

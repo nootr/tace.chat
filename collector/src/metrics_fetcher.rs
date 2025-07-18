@@ -1,4 +1,6 @@
 use http_body_util::BodyExt;
+use hyper::Uri;
+use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
@@ -13,15 +15,18 @@ pub async fn fetch_and_store_metrics(
     bootstrap_node_api_url: String,
     db_conn: Arc<tokio::sync::Mutex<Connection>>,
 ) {
-    let client: Client<HttpConnector, http_body_util::Full<bytes::Bytes>> =
-        Client::builder(TokioExecutor::new()).build(HttpConnector::new());
-    let uri = match format!("{}/metrics", bootstrap_node_api_url).parse() {
+    let uri: Uri = match format!("{}/metrics", bootstrap_node_api_url).parse() {
         Ok(uri) => uri,
         Err(e) => {
             error!("Failed to parse URI: {}", e);
             return;
         }
     };
+
+    // Create HTTPS client that supports both HTTP and HTTPS
+    let https = HttpsConnector::new();
+    let client: Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>> =
+        Client::builder(TokioExecutor::new()).build(https);
 
     info!("Fetching metrics from {}", uri);
 
