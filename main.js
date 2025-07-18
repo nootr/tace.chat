@@ -1,6 +1,6 @@
 import init, { generate_keypair, encrypt, decrypt, sign } from './pkg/tace_webclient.js';
 
-const bootstrapNode = 'bootstrap.tace.chat:6345';
+const bootstrapNode = 'bootstrap.tace.chat';
 const apiProtocol = 'https';
 
 const collectorUrl = 'https://metrics.tace.chat';
