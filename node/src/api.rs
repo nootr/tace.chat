@@ -423,10 +423,11 @@ async fn handler<T: NetworkClient + Send + Sync + 'static>(
 }
 
 pub async fn run<T: NetworkClient + Send + Sync + 'static>(
-    port: u16,
+    bind_host: &str,
+    bind_port: u16,
     node: Arc<ChordNode<T>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
+    let addr: SocketAddr = format!("{}:{}", bind_host, bind_port).parse()?;
     let listener = TcpListener::bind(addr).await?;
 
     info!("API is listening on {}", addr);
