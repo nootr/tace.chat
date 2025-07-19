@@ -465,7 +465,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     "Error: Failed to get successor from predecessor {}.",
                     predecessor.address
                 );
-                
+
                 // Try to use successor list as fallback
                 if let Some(next_available) = self.find_next_available_successor().await {
                     log_info!(
@@ -735,12 +735,12 @@ impl<T: NetworkClient> ChordNode<T> {
     // Find the next available successor from the successor list
     async fn find_next_available_successor(&self) -> Option<NodeInfo> {
         let successor_list = self.successor_list.lock().unwrap().clone();
-        
+
         for successor in successor_list {
             if successor.id == self.info.id {
                 continue;
             }
-            
+
             // Try to ping the successor
             match self
                 .network_client
@@ -758,7 +758,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
             }
         }
-        
+
         None
     }
 
@@ -766,21 +766,29 @@ impl<T: NetworkClient> ChordNode<T> {
     async fn update_successor_list(&self) {
         let current_successor = self.successor.lock().unwrap().clone();
         let mut new_list = vec![current_successor.clone()];
-        
+
         let mut current = current_successor;
         for _i in 1..SUCCESSOR_LIST_SIZE {
             if current.id == self.info.id {
                 // We've looped back to ourselves
                 break;
             }
-            
+
             match self
                 .network_client
                 .call_node(&current.address, DhtMessage::GetSuccessor)
                 .await
             {
-                Ok(DhtMessage::FoundSuccessor { id, address, api_address }) => {
-                    let next = NodeInfo { id, address, api_address };
+                Ok(DhtMessage::FoundSuccessor {
+                    id,
+                    address,
+                    api_address,
+                }) => {
+                    let next = NodeInfo {
+                        id,
+                        address,
+                        api_address,
+                    };
                     if next.id == self.info.id {
                         // Don't include ourselves in the successor list
                         break;
@@ -789,17 +797,20 @@ impl<T: NetworkClient> ChordNode<T> {
                     current = next;
                 }
                 _ => {
-                    debug!("[{}] Failed to get successor from {}", self.info.address, current.address);
+                    debug!(
+                        "[{}] Failed to get successor from {}",
+                        self.info.address, current.address
+                    );
                     break;
                 }
             }
         }
-        
+
         // Fill remaining slots with the last known successor
         while new_list.len() < SUCCESSOR_LIST_SIZE {
             new_list.push(new_list.last().unwrap().clone());
         }
-        
+
         let mut successor_list = self.successor_list.lock().unwrap();
         *successor_list = new_list;
     }
@@ -844,7 +855,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 "Successor {} is unreachable, finding next available successor",
                 successor.address
             );
-            
+
             if let Some(new_successor) = self.find_next_available_successor().await {
                 {
                     let mut successor_lock = self.successor.lock().unwrap();
@@ -945,7 +956,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 log_error!(self.info.address, "Error notifying successor: {}", e);
             }
         }
-        
+
         // Update successor list after stabilization
         self.update_successor_list().await;
     }
@@ -1187,23 +1198,24 @@ impl<T: NetworkClient> ChordNode<T> {
                         "Predecessor {} is unreachable, cleared predecessor",
                         predecessor.address
                     );
-                    
+
                     // Also check if this affects our data responsibility
                     // If we had a predecessor and it's gone, we might need to
                     // take over its key range
-                    self.reconcile_data_after_predecessor_failure(predecessor).await;
+                    self.reconcile_data_after_predecessor_failure(predecessor)
+                        .await;
                 }
             }
         }
     }
-    
+
     // Handle data reconciliation after predecessor failure
     async fn reconcile_data_after_predecessor_failure(&self, failed_predecessor: NodeInfo) {
         debug!(
             "[{}] Reconciling data after predecessor {} failure",
             self.info.address, failed_predecessor.address
         );
-        
+
         // In a production system, we would:
         // 1. Query other nodes for data that should now be our responsibility
         // 2. Ensure proper replication of data
@@ -1330,6 +1342,7 @@ mod tests {
         let node = ChordNode {
             info: node_info.clone(),
             successor: Arc::new(Mutex::new(node_info.clone())),
+            successor_list: Arc::new(Mutex::new(vec![node_info.clone(); SUCCESSOR_LIST_SIZE])),
             predecessor: Arc::new(Mutex::new(None)),
             finger_table: Arc::new(Mutex::new(finger_table_vec)),
             data: Arc::new(Mutex::new(HashMap::new())),
@@ -1642,6 +1655,14 @@ mod tests {
                 address: "127.0.0.1:8001".to_string(),
                 api_address: "127.0.0.1:8001".to_string(),
             })),
+            successor_list: Arc::new(Mutex::new(vec![
+                NodeInfo {
+                    id: hex_to_node_id("0000000000000000000000000000000000000001"),
+                    address: "127.0.0.1:8001".to_string(),
+                    api_address: "127.0.0.1:8001".to_string(),
+                };
+                SUCCESSOR_LIST_SIZE
+            ])),
             predecessor: Arc::new(Mutex::new(None)),
             finger_table: Arc::new(Mutex::new(vec![node_info.clone(); M])),
             data: Arc::new(Mutex::new(HashMap::new())),
@@ -2002,6 +2023,37 @@ mod tests {
             .withf(|_, message| matches!(message, DhtMessage::Notify { .. }))
             .times(1)
             .returning(|_, _| Ok(DhtMessage::Pong));
+
+        // Mock for GetSuccessor (called by update_successor_list)
+        // First call returns node at 8005
+        mock_network_client
+            .expect_call_node()
+            .withf(|addr, message| {
+                addr == "127.0.0.1:8003" && matches!(message, DhtMessage::GetSuccessor)
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(DhtMessage::FoundSuccessor {
+                    id: hex_to_node_id("7777777777777777777777777777777777777777"),
+                    address: "127.0.0.1:8005".to_string(),
+                    api_address: "127.0.0.1:8005".to_string(),
+                })
+            });
+
+        // Second call (on 8005) returns node at 8006
+        mock_network_client
+            .expect_call_node()
+            .withf(|addr, message| {
+                addr == "127.0.0.1:8005" && matches!(message, DhtMessage::GetSuccessor)
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(DhtMessage::FoundSuccessor {
+                    id: hex_to_node_id("8888888888888888888888888888888888888888"),
+                    address: "127.0.0.1:8006".to_string(),
+                    api_address: "127.0.0.1:8006".to_string(),
+                })
+            });
 
         let node =
             ChordNode::new_for_test("127.0.0.1:9000".to_string(), Arc::new(mock_network_client));

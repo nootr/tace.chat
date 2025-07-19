@@ -30,14 +30,19 @@ impl RealNetworkClient {
     ) -> Result<DhtMessage, Box<dyn std::error::Error + Send + Sync>> {
         let mut delay = INITIAL_RETRY_DELAY;
         let mut last_error = None;
-        
+
         for attempt in 0..MAX_RETRIES {
             if attempt > 0 {
-                debug!("Retrying connection to {} (attempt {}/{})", address, attempt + 1, MAX_RETRIES);
+                debug!(
+                    "Retrying connection to {} (attempt {}/{})",
+                    address,
+                    attempt + 1,
+                    MAX_RETRIES
+                );
                 tokio::time::sleep(delay).await;
                 delay *= 2; // Exponential backoff
             }
-            
+
             match self.call_node_internal(address, message.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e) => {
@@ -45,7 +50,7 @@ impl RealNetworkClient {
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| "Unknown error".into()))
     }
 
@@ -54,8 +59,11 @@ impl RealNetworkClient {
         address: &str,
         message: DhtMessage,
     ) -> Result<DhtMessage, Box<dyn std::error::Error + Send + Sync>> {
-        debug!("Attempting to connect to {} with timeout {:?}", address, DEFAULT_TIMEOUT);
-        
+        debug!(
+            "Attempting to connect to {} with timeout {:?}",
+            address, DEFAULT_TIMEOUT
+        );
+
         // Apply timeout to connection attempt
         let mut stream = match timeout(DEFAULT_TIMEOUT, TcpStream::connect(address)).await {
             Ok(Ok(stream)) => {
@@ -67,7 +75,10 @@ impl RealNetworkClient {
                 return Err(Box::new(e));
             }
             Err(_) => {
-                error!("Connection to {} timed out after {:?}", address, DEFAULT_TIMEOUT);
+                error!(
+                    "Connection to {} timed out after {:?}",
+                    address, DEFAULT_TIMEOUT
+                );
                 return Err("Connection timeout".into());
             }
         };
@@ -77,7 +88,7 @@ impl RealNetworkClient {
 
         // Apply timeout to write operation
         match timeout(DEFAULT_TIMEOUT, stream.write_all(&encoded)).await {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 error!("Failed to write to {}: {}", address, e);
                 return Err(Box::new(e));
@@ -90,7 +101,7 @@ impl RealNetworkClient {
 
         // Apply timeout to shutdown
         match timeout(Duration::from_secs(1), stream.shutdown()).await {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 debug!("Shutdown error (non-critical): {}", e);
             }
@@ -100,10 +111,10 @@ impl RealNetworkClient {
         }
 
         let mut buffer = Vec::new();
-        
+
         // Apply timeout to read operation
         match timeout(DEFAULT_TIMEOUT, stream.read_to_end(&mut buffer)).await {
-            Ok(Ok(_)) => {},
+            Ok(Ok(_)) => {}
             Ok(Err(e)) => {
                 error!("Failed to read from {}: {}", address, e);
                 return Err(Box::new(e));
