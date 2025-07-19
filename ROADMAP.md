@@ -27,7 +27,6 @@ tace.chat is a decentralized, end-to-end encrypted messaging platform that elimi
 - Complex setup for new users
 
 **Operational:**
-- SQLite database (single-node limitation)
 - In-memory data storage (no persistence)
 - Limited monitoring and observability
 - Manual scaling and maintenance

@@ -44,8 +44,8 @@ pub fn insert_metrics(conn: &Connection, metrics: &NetworkMetrics) -> SqliteResu
         params![
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
             metrics.node_churn_rate,
             metrics.routing_table_health,
             metrics.operation_success_rate,

@@ -187,7 +187,16 @@ async fn get_challenge_handler<B>(req: Request<B>) -> Result<Response<Full<Bytes
     };
 
     let challenges_map = get_challenges().await;
-    let mut challenges = challenges_map.lock().unwrap();
+    let mut challenges = match challenges_map.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            error!("Failed to acquire challenges lock");
+            return Ok(format_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{\"error\": \"Internal server error\"}",
+            ));
+        }
+    };
 
     // Clean up expired challenges
     challenges.retain(|_, c| c.timestamp.elapsed() < CHALLENGE_EXPIRATION);
@@ -244,11 +253,20 @@ async fn message_handler<T: NetworkClient>(
         nonce: message_payload.nonce,
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs(),
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
     };
 
-    let serialized = bincode::serialize(&stored_message).unwrap();
+    let serialized = match bincode::serialize(&stored_message) {
+        Ok(data) => data,
+        Err(e) => {
+            error!("Failed to serialize message: {}", e);
+            return Ok(format_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{\"error\": \"Failed to serialize message\"}",
+            ));
+        }
+    };
 
     // Find the node responsible for this key
     let responsible_node = node.find_successor(key).await;
@@ -320,7 +338,16 @@ where
     // Verify the challenge
     let is_valid = {
         let challenges_map = get_challenges().await;
-        let mut challenges = challenges_map.lock().unwrap();
+        let mut challenges = match challenges_map.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                error!("Failed to acquire challenges lock during poll");
+                return Ok(format_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "{\"error\": \"Internal server error\"}",
+                ));
+            }
+        };
         if let Some(challenge) = challenges.get(&poll_payload.public_key) {
             if challenge.nonce == poll_payload.nonce {
                 if keys::verify(
@@ -394,8 +421,26 @@ where
 async fn metrics_handler<T: NetworkClient>(
     node: Arc<ChordNode<T>>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let metrics = node.metrics.lock().unwrap().clone();
-    let response_body = serde_json::to_string(&metrics).unwrap();
+    let metrics = match node.metrics.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => {
+            error!("Failed to acquire metrics lock");
+            return Ok(format_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{\"error\": \"Failed to get metrics\"}",
+            ));
+        }
+    };
+    let response_body = match serde_json::to_string(&metrics) {
+        Ok(json) => json,
+        Err(e) => {
+            error!("Failed to serialize metrics: {}", e);
+            return Ok(format_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{\"error\": \"Failed to serialize metrics\"}",
+            ));
+        }
+    };
     Ok(format_response(StatusCode::OK, response_body))
 }
 
