@@ -1,4 +1,4 @@
-// Shared Rust library
+/// Shared Rust library
 pub mod dht_messages;
 pub mod keys;
 pub mod metrics;
@@ -6,12 +6,12 @@ pub mod metrics;
 use num_bigint::BigUint;
 use num_traits::identities::One;
 
-// Converts NodeId (byte array) to BigUint
+/// Converts NodeId (byte array) to BigUint
 pub fn node_id_to_biguint(id: &dht_messages::NodeId) -> BigUint {
     BigUint::from_bytes_be(id)
 }
 
-// Converts BigUint to NodeId (byte array), padding with zeros if necessary
+/// Converts BigUint to NodeId (byte array), padding with zeros if necessary
 pub fn biguint_to_node_id(biguint: &BigUint) -> dht_messages::NodeId {
     let bytes = biguint.to_bytes_be();
     let mut id = [0u8; 20];
@@ -20,7 +20,7 @@ pub fn biguint_to_node_id(biguint: &BigUint) -> dht_messages::NodeId {
     id
 }
 
-// Calculates (id + 2^i) mod 2^M
+/// Calculates (id + 2^i) mod 2^M
 pub fn add_id_power_of_2(id: &dht_messages::NodeId, i: usize) -> dht_messages::NodeId {
     let id_biguint = node_id_to_biguint(id);
     let two_pow_i = BigUint::one() << i;
@@ -30,8 +30,8 @@ pub fn add_id_power_of_2(id: &dht_messages::NodeId, i: usize) -> dht_messages::N
     biguint_to_node_id(&result)
 }
 
-// Checks if an ID is between two other IDs in a circular ID space.
-// `id` is between `start` and `end` if `start < id <= end` in the circular space.
+/// Checks if an ID is between two other IDs in a circular ID space.
+/// `id` is between `start` and `end` if `start < id <= end` in the circular space.
 pub fn is_between(
     id: &dht_messages::NodeId,
     start: &dht_messages::NodeId,

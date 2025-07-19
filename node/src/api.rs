@@ -56,7 +56,7 @@ struct PollRequestPayload {
     signature: Vec<u8>,
 }
 
-// Store challenges with a timestamp to prevent them from living forever
+/// Store challenges with a timestamp to prevent them from living forever
 struct Challenge {
     nonce: Vec<u8>,
     timestamp: Instant,

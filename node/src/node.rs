@@ -14,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 use crate::network_client::NetworkClient;
 
-// Helper struct to automatically decrement connection count on drop
+/// Helper struct to automatically decrement connection count on drop
 struct ConnectionGuard {
     counter: Arc<AtomicU32>,
 }
@@ -45,6 +45,15 @@ const REPLICATION_FACTOR: usize = 3; // Number of replicas for each data item
 const VIRTUAL_NODES_PER_NODE: usize = 32; // Number of virtual nodes per physical node for better load distribution
 const LOAD_BALANCE_THRESHOLD: f32 = 0.8; // Trigger rebalancing when load exceeds 80%
 
+/// Represents a node in the Chord DHT network.
+///
+/// Each `ChordNode` is responsible for a segment of the hash space and stores key-value pairs.
+/// It maintains connections to a successor, a predecessor, and a finger table for efficient lookups.
+/// The node also includes logic for joining the network, stabilizing its connections, and handling data storage and retrieval.
+///
+/// # Type Parameters
+///
+/// * `T`: A type that implements the `NetworkClient` trait, used for communication between nodes.
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
     pub id: NodeId,
@@ -88,7 +97,7 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
 }
 
 impl<T: NetworkClient> ChordNode<T> {
-    // Helper method for safe mutex access - returns early on poisoned mutex
+    /// Helper method for safe mutex access - returns early on poisoned mutex
     fn safe_lock<'a, U>(
         &self,
         mutex: &'a std::sync::Mutex<U>,
@@ -106,7 +115,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Helper method to safely update a mutex value
+    /// Helper method to safely update a mutex value
     fn safe_update<U, F>(&self, mutex: &std::sync::Mutex<U>, update_fn: F) -> bool
     where
         F: FnOnce(&mut U),
@@ -190,7 +199,7 @@ impl<T: NetworkClient> ChordNode<T> {
         hasher.finalize().into()
     }
 
-    // Generate virtual nodes for better load distribution
+    /// Generate virtual nodes for better load distribution
     fn generate_virtual_nodes(address: &str) -> Vec<NodeId> {
         let mut virtual_nodes = Vec::with_capacity(VIRTUAL_NODES_PER_NODE);
         for i in 0..VIRTUAL_NODES_PER_NODE {
@@ -244,7 +253,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) {
-        // Check connection limit
+        /// Check connection limit
         let current_connections = self.active_connections.fetch_add(1, Ordering::Relaxed);
         if current_connections >= MAX_CONNECTIONS {
             self.active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -255,7 +264,7 @@ impl<T: NetworkClient> ChordNode<T> {
             return;
         }
 
-        // Ensure connection count is decremented on exit
+        /// Ensure connection count is decremented on exit
         let _guard = ConnectionGuard {
             counter: self.active_connections.clone(),
         };
@@ -416,7 +425,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Stores a key-value pair in the DHT with replication
+    /// Stores a key-value pair in the DHT with replication
     pub async fn store(&self, key: NodeId, value: Vec<u8>) {
         // Store locally first
         if let Some(mut data) = self.safe_lock(&self.data) {
@@ -439,7 +448,7 @@ impl<T: NetworkClient> ChordNode<T> {
         self.replicate_data(key, vec![value]).await;
     }
 
-    // Replicate data to backup nodes for fault tolerance
+    /// Replicate data to backup nodes for fault tolerance
     async fn replicate_data(&self, key: NodeId, values: Vec<Vec<u8>>) {
         let replica_nodes = self.get_replica_nodes(key).await;
 
@@ -495,7 +504,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Get the nodes responsible for storing replicas of this key with load balancing
+    /// Get the nodes responsible for storing replicas of this key with load balancing
     async fn get_replica_nodes(&self, key: NodeId) -> Vec<NodeInfo> {
         let mut replica_nodes = Vec::new();
 
@@ -546,7 +555,7 @@ impl<T: NetworkClient> ChordNode<T> {
         replica_nodes
     }
 
-    // Handle incoming replication request
+    /// Handle incoming replication request
     async fn handle_replicate_data(
         &self,
         key: NodeId,
@@ -581,7 +590,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Handle request for replica data during recovery
+    /// Handle request for replica data during recovery
     async fn handle_request_replicas(
         &self,
         start: NodeId,
@@ -611,7 +620,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Retrieves a value by key from the DHT with load-balanced reads
+    /// Retrieves a value by key from the DHT with load-balanced reads
     pub async fn retrieve(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
         // First try local retrieval
         if let Some(data) = self.safe_lock(&self.data) {
@@ -629,7 +638,7 @@ impl<T: NetworkClient> ChordNode<T> {
         self.retrieve_from_replicas(key).await
     }
 
-    // Retrieve from replicas using load balancing
+    /// Retrieve from replicas using load balancing
     async fn retrieve_from_replicas(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
         let replica_nodes = self.get_replica_nodes(key).await;
 
@@ -697,7 +706,7 @@ impl<T: NetworkClient> ChordNode<T> {
         None
     }
 
-    // Retrieves all key-value pairs in a given range
+    /// Retrieves all key-value pairs in a given range
     pub async fn get_data_range(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<Vec<u8>>)> {
         let data = self.data.lock().unwrap();
         let mut result = Vec::new();
@@ -853,7 +862,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Finds the successor of an ID
+    /// Finds the successor of an ID
     pub async fn find_successor(&self, id: NodeId) -> NodeInfo {
         // According to Chord algorithm: find_successor(id) = find_predecessor(id).successor
         let predecessor = self.find_predecessor(id).await;
@@ -905,7 +914,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Find successor using virtual nodes for better load distribution
+    /// Find successor using virtual nodes for better load distribution
     async fn find_successor_with_virtual_nodes(&self, key: NodeId) -> NodeInfo {
         // Check if any of our virtual nodes are responsible for this key
         if let Some(virtual_nodes) = self.safe_lock(&self.virtual_nodes) {
@@ -928,7 +937,7 @@ impl<T: NetworkClient> ChordNode<T> {
         self.find_successor(key).await
     }
 
-    // Finds the predecessor of an ID
+    /// Finds the predecessor of an ID
     pub async fn find_predecessor(&self, id: NodeId) -> NodeInfo {
         let mut n_prime = self.info.clone();
         let mut current_successor = self.successor.lock().unwrap().clone();
@@ -1015,7 +1024,7 @@ impl<T: NetworkClient> ChordNode<T> {
         n_prime
     }
 
-    // Finds the node in the finger table that most immediately precedes `id`.
+    /// Finds the node in the finger table that most immediately precedes `id`.
     async fn closest_preceding_node(&self, id: NodeId) -> NodeInfo {
         let finger_table = self.finger_table.lock().unwrap();
         // Iterate finger table in reverse
@@ -1029,8 +1038,8 @@ impl<T: NetworkClient> ChordNode<T> {
         self.info.clone()
     }
 
-    // Handles a ShareMetrics message by averaging with local metrics
-    // and returning the updated local metrics.
+    /// Handles a ShareMetrics message by averaging with local metrics
+    /// and returning the updated local metrics.
     pub async fn handle_share_metrics(&self, incoming_metrics: NetworkMetrics) -> NetworkMetrics {
         let mut local_metrics = self.metrics.lock().unwrap();
 
@@ -1063,7 +1072,7 @@ impl<T: NetworkClient> ChordNode<T> {
         local_metrics.clone()
     }
 
-    // Periodically shares metrics with a random peer and updates local metrics
+    /// Periodically shares metrics with a random peer and updates local metrics
     pub async fn share_and_update_metrics(&self) {
         self.update_local_metrics().await;
 
@@ -1134,7 +1143,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Updates the local metrics based on the node's current state
+    /// Updates the local metrics based on the node's current state
     async fn update_local_metrics(&self) {
         let mut local_metrics = self.metrics.lock().unwrap();
 
@@ -1174,7 +1183,7 @@ impl<T: NetworkClient> ChordNode<T> {
         // For now, we'll leave them as they are, to be updated by gossip.
     }
 
-    // Find the next available successor from the successor list
+    /// Find the next available successor from the successor list
     async fn find_next_available_successor(&self) -> Option<NodeInfo> {
         let successor_list = self.successor_list.lock().unwrap().clone();
 
@@ -1204,7 +1213,7 @@ impl<T: NetworkClient> ChordNode<T> {
         None
     }
 
-    // Update the successor list by querying successors
+    /// Update the successor list by querying successors
     async fn update_successor_list(&self) {
         let current_successor = self.successor.lock().unwrap().clone();
         let mut new_list = vec![current_successor.clone()];
@@ -1666,7 +1675,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Handle data reconciliation after predecessor failure
+    /// Handle data reconciliation after predecessor failure
     async fn reconcile_data_after_predecessor_failure(&self, failed_predecessor: NodeInfo) {
         log_info!(
             self.info.address,
@@ -1742,7 +1751,7 @@ impl<T: NetworkClient> ChordNode<T> {
         );
     }
 
-    // Get nodes that might have replicas for a given key range
+    /// Get nodes that might have replicas for a given key range
     async fn get_replica_nodes_for_range(&self, start: NodeId, end: NodeId) -> Vec<NodeInfo> {
         let mut nodes = Vec::new();
 
@@ -1831,14 +1840,14 @@ impl<T: NetworkClient> ChordNode<T> {
 
     // Load balancing methods
 
-    // Update load metrics for a node
+    /// Update load metrics for a node
     pub async fn update_node_load(&self, node_id: NodeId, load: f32) {
         if let Some(mut node_loads) = self.safe_lock(&self.node_loads) {
             node_loads.insert(node_id, load);
         }
     }
 
-    // Calculate current load for this node
+    /// Calculate current load for this node
     pub async fn calculate_current_load(&self) -> f32 {
         let mut load = 0.0;
 
@@ -1862,7 +1871,7 @@ impl<T: NetworkClient> ChordNode<T> {
         load.min(1.0) // Cap at 100%
     }
 
-    // Check if load balancing is needed and trigger rebalancing
+    /// Check if load balancing is needed and trigger rebalancing
     pub async fn check_and_rebalance(&self) {
         let current_load = self.calculate_current_load().await;
 
@@ -1885,7 +1894,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Migrate data to less loaded nodes
+    /// Migrate data to less loaded nodes
     async fn rebalance_data(&self) {
         let keys_to_migrate = if let Some(data) = self.safe_lock(&self.data) {
             data.keys().take(10).cloned().collect::<Vec<NodeId>>() // Migrate up to 10 keys
@@ -1932,7 +1941,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Migrate a specific key to a target node
+    /// Migrate a specific key to a target node
     async fn migrate_key_to_node(&self, key: NodeId, target_node: NodeInfo) {
         // Get the data to migrate
         let data_to_migrate = if let Some(mut data) = self.safe_lock(&self.data) {

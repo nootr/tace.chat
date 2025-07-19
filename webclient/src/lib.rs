@@ -1,7 +1,7 @@
 use tace_lib::keys;
 use wasm_bindgen::prelude::*;
 
-// --- Key Generation ---
+/// --- Key Generation ---
 
 #[wasm_bindgen]
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub fn generate_keypair() -> JsKeypair {
     }
 }
 
-// --- Encryption & Decryption ---
+/// --- Encryption & Decryption ---
 
 #[wasm_bindgen]
 pub struct EncryptedMessage {
@@ -60,7 +60,7 @@ pub fn decrypt(
     }
 }
 
-// --- Signing ---
+/// --- Signing ---
 
 #[wasm_bindgen]
 pub fn sign(private_key_hex: &str, message: &[u8]) -> Result<Vec<u8>, JsValue> {
