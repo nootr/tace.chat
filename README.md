@@ -31,6 +31,10 @@ Secure messaging shouldn't require a computer science degree. Just open, connect
 - **Privacy**: No logs, no metadata collection, no tracking
 - **Compatibility**: Works in any modern browser
 
+## Roadmap
+
+See our [Roadmap](ROADMAP.md) for upcoming features and improvements.
+
 ## Support the network
 
 The network grows stronger with each node. Running a node is lightweight and helps preserve privacy for everyone.
