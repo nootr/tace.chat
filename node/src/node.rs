@@ -41,6 +41,7 @@ const M: usize = 160; // Number of bits in Chord ID space (SHA-1 produces 160-bi
 const SUCCESSOR_LIST_SIZE: usize = 3; // Number of successors to maintain for fault tolerance
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit to prevent DoS
 const MAX_CONNECTIONS: u32 = 100; // Maximum concurrent connections
+const REPLICATION_FACTOR: usize = 3; // Number of replicas for each data item
 
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
@@ -331,6 +332,14 @@ impl<T: NetworkClient> ChordNode<T> {
                             metrics: response_metrics,
                         }
                     }
+                    DhtMessage::ReplicateData { key, values, replica_id } => {
+                        let success = self.handle_replicate_data(key, values, replica_id).await;
+                        DhtMessage::ReplicationAck { key, success }
+                    }
+                    DhtMessage::RequestReplicas { key_range_start, key_range_end } => {
+                        let replicas = self.handle_request_replicas(key_range_start, key_range_end).await;
+                        DhtMessage::ReplicaData { replicas }
+                    }
                     _ => {
                         log_error!(
                             self.info.address,
@@ -371,17 +380,145 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-    // Stores a key-value pair in the DHT
+    // Stores a key-value pair in the DHT with replication
     pub async fn store(&self, key: NodeId, value: Vec<u8>) {
+        // Store locally first
         if let Some(mut data) = self.safe_lock(&self.data) {
             let values = data.entry(key).or_default();
-            values.push(value);
-            log_info!(self.info.address, "Stored key: {}", hex::encode(key));
+            values.push(value.clone());
+            log_info!(self.info.address, "Stored key locally: {}", hex::encode(key));
         } else {
             log_error!(
                 self.info.address,
                 "Failed to acquire data lock for store operation"
             );
+            return;
+        }
+
+        // Replicate to backup nodes
+        self.replicate_data(key, vec![value]).await;
+    }
+
+    // Replicate data to backup nodes for fault tolerance
+    async fn replicate_data(&self, key: NodeId, values: Vec<Vec<u8>>) {
+        let replica_nodes = self.get_replica_nodes(key).await;
+        
+        for (i, node) in replica_nodes.iter().enumerate() {
+            if node.id == self.info.id {
+                continue; // Skip self
+            }
+            
+            let replica_id = (i + 1) as u8;
+            let message = DhtMessage::ReplicateData {
+                key,
+                values: values.clone(),
+                replica_id,
+            };
+            
+            match self.network_client.call_node(&node.address, message).await {
+                Ok(DhtMessage::ReplicationAck { success: true, .. }) => {
+                    debug!(
+                        "[{}] Successfully replicated key {} to replica {} at {}",
+                        self.info.address, hex::encode(key), replica_id, node.address
+                    );
+                }
+                Ok(DhtMessage::ReplicationAck { success: false, .. }) => {
+                    log_error!(
+                        self.info.address,
+                        "Replication failed for key {} to replica {} at {}",
+                        hex::encode(key), replica_id, node.address
+                    );
+                }
+                Err(e) => {
+                    log_error!(
+                        self.info.address,
+                        "Failed to replicate key {} to {}: {}",
+                        hex::encode(key), node.address, e
+                    );
+                }
+                _ => {
+                    log_error!(
+                        self.info.address,
+                        "Unexpected response when replicating key {} to {}",
+                        hex::encode(key), node.address
+                    );
+                }
+            }
+        }
+    }
+
+    // Get the nodes responsible for storing replicas of this key
+    async fn get_replica_nodes(&self, key: NodeId) -> Vec<NodeInfo> {
+        let mut replica_nodes = Vec::new();
+        
+        // Primary node (responsible for the key)
+        let primary = self.find_successor(key).await;
+        replica_nodes.push(primary.clone());
+        
+        // Get additional replica nodes from successor list
+        if let Some(successor_list) = self.safe_lock(&self.successor_list) {
+            let mut current_node = primary;
+            for _ in 1..REPLICATION_FACTOR {
+                // Find next node in the ring
+                if let Some(next_node) = successor_list.iter()
+                    .find(|node| node.id != current_node.id && 
+                                 !replica_nodes.iter().any(|r| r.id == node.id)) {
+                    replica_nodes.push(next_node.clone());
+                    current_node = next_node.clone();
+                } else {
+                    break; // No more unique nodes available
+                }
+            }
+        }
+        
+        replica_nodes
+    }
+
+    // Handle incoming replication request
+    async fn handle_replicate_data(&self, key: NodeId, values: Vec<Vec<u8>>, replica_id: u8) -> bool {
+        debug!(
+            "[{}] Receiving replica {} for key {}",
+            self.info.address, replica_id, hex::encode(key)
+        );
+
+        if let Some(mut data) = self.safe_lock(&self.data) {
+            let entry = data.entry(key).or_default();
+            entry.extend(values);
+            log_info!(
+                self.info.address,
+                "Stored replica {} for key: {}",
+                replica_id, hex::encode(key)
+            );
+            true
+        } else {
+            log_error!(
+                self.info.address,
+                "Failed to store replica {} for key: {}",
+                replica_id, hex::encode(key)
+            );
+            false
+        }
+    }
+
+    // Handle request for replica data during recovery
+    async fn handle_request_replicas(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<Vec<u8>>)> {
+        log_info!(
+            self.info.address,
+            "Providing replicas for range ({}, {}]",
+            hex::encode(start), hex::encode(end)
+        );
+
+        if let Some(data) = self.safe_lock(&self.data) {
+            let mut replicas = Vec::new();
+            for (key, values) in data.iter() {
+                if tace_lib::is_between(key, &start, &end) || *key == end {
+                    replicas.push((*key, values.clone()));
+                }
+            }
+            replicas
+        } else {
+            log_error!(self.info.address, "Failed to access data for replica request");
+            Vec::new()
         }
     }
 
@@ -1352,19 +1489,100 @@ impl<T: NetworkClient> ChordNode<T> {
 
     // Handle data reconciliation after predecessor failure
     async fn reconcile_data_after_predecessor_failure(&self, failed_predecessor: NodeInfo) {
-        debug!(
-            "[{}] Reconciling data after predecessor {} failure",
-            self.info.address, failed_predecessor.address
-        );
-
-        // In a production system, we would:
-        // 1. Query other nodes for data that should now be our responsibility
-        // 2. Ensure proper replication of data
-        // For now, we'll just log this event
         log_info!(
             self.info.address,
-            "Data reconciliation needed after predecessor failure"
+            "Reconciling data after predecessor {} failure",
+            failed_predecessor.address
         );
+        
+        // Calculate the key range we're now responsible for
+        let our_pred = if let Some(pred) = self.safe_lock(&self.predecessor) {
+            pred.as_ref().map(|p| p.id)
+        } else {
+            None
+        };
+        
+        let start_range = our_pred.unwrap_or(failed_predecessor.id);
+        let end_range = self.info.id;
+        
+        // Request replicas from other nodes for our new responsibility range
+        let replica_nodes = self.get_replica_nodes_for_range(start_range, end_range).await;
+        
+        for node in replica_nodes {
+            if node.id == self.info.id {
+                continue; // Skip ourselves
+            }
+            
+            let message = DhtMessage::RequestReplicas {
+                key_range_start: start_range,
+                key_range_end: end_range,
+            };
+            
+            match self.network_client.call_node(&node.address, message).await {
+                Ok(DhtMessage::ReplicaData { replicas }) => {
+                    let mut recovered_count = 0;
+                    if let Some(mut data) = self.safe_lock(&self.data) {
+                        for (key, values) in replicas {
+                            let entry = data.entry(key).or_default();
+                            let initial_count = entry.len();
+                            entry.extend(values);
+                            recovered_count += entry.len() - initial_count;
+                        }
+                    }
+                    
+                    log_info!(
+                        self.info.address,
+                        "Recovered {} data items from replica at {}",
+                        recovered_count, node.address
+                    );
+                }
+                Err(e) => {
+                    log_error!(
+                        self.info.address,
+                        "Failed to get replicas from {}: {}",
+                        node.address, e
+                    );
+                }
+                _ => {
+                    log_error!(
+                        self.info.address,
+                        "Unexpected response when requesting replicas from {}",
+                        node.address
+                    );
+                }
+            }
+        }
+        
+        log_info!(
+            self.info.address,
+            "Completed data reconciliation after predecessor failure"
+        );
+    }
+
+    // Get nodes that might have replicas for a given key range
+    async fn get_replica_nodes_for_range(&self, start: NodeId, end: NodeId) -> Vec<NodeInfo> {
+        let mut nodes = Vec::new();
+        
+        // Add our successor list - they likely have replicas
+        if let Some(successor_list) = self.safe_lock(&self.successor_list) {
+            nodes.extend(successor_list.clone());
+        }
+        
+        // Add some nodes from finger table for broader coverage
+        if let Some(finger_table) = self.safe_lock(&self.finger_table) {
+            for (i, node) in finger_table.iter().enumerate() {
+                if i % 4 == 0 { // Sample every 4th finger for efficiency
+                    nodes.push(node.clone());
+                }
+            }
+        }
+        
+        // Remove duplicates and ourselves
+        nodes.sort_by_key(|n| n.id);
+        nodes.dedup_by_key(|n| n.id);
+        nodes.retain(|n| n.id != self.info.id);
+        
+        nodes
     }
 
     pub fn shutdown(&self) {

@@ -88,4 +88,21 @@ pub enum DhtMessage {
     MetricsShared {
         metrics: NetworkMetrics,
     },
+    // Data replication messages
+    ReplicateData {
+        key: NodeId,
+        values: Vec<Vec<u8>>,
+        replica_id: u8, // Which replica this is (1, 2, 3...)
+    },
+    ReplicationAck {
+        key: NodeId,
+        success: bool,
+    },
+    RequestReplicas {
+        key_range_start: NodeId,
+        key_range_end: NodeId,
+    },
+    ReplicaData {
+        replicas: Vec<(NodeId, Vec<Vec<u8>>)>,
+    },
 }
