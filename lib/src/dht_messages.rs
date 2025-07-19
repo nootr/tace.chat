@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 // Placeholder for a Node ID (e.g., SHA1 hash)
 pub type NodeId = [u8; 20]; // 160-bit ID for Chord
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum DhtMessage {
     // Error message
     Error {

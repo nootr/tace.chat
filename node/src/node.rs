@@ -26,6 +26,7 @@ macro_rules! log_error {
 }
 
 const M: usize = 160; // Number of bits in Chord ID space (SHA-1 produces 160-bit hash)
+const SUCCESSOR_LIST_SIZE: usize = 3; // Number of successors to maintain for fault tolerance
 
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
@@ -38,6 +39,7 @@ pub struct NodeInfo {
 pub struct ChordNode<T: NetworkClient> {
     pub info: NodeInfo,
     pub successor: Arc<Mutex<NodeInfo>>,
+    pub successor_list: Arc<Mutex<Vec<NodeInfo>>>,
     pub predecessor: Arc<Mutex<Option<NodeInfo>>>,
     pub finger_table: Arc<Mutex<Vec<NodeInfo>>>,
     pub data: Arc<Mutex<HashMap<NodeId, Vec<Vec<u8>>>>>,
@@ -50,6 +52,7 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
         ChordNode {
             info: self.info.clone(),
             successor: self.successor.clone(),
+            successor_list: self.successor_list.clone(),
             predecessor: self.predecessor.clone(),
             finger_table: self.finger_table.clone(),
             data: self.data.clone(), // This clones the Arc, not the HashMap
@@ -69,6 +72,7 @@ impl<T: NetworkClient> ChordNode<T> {
         };
 
         let successor = Arc::new(Mutex::new(info.clone()));
+        let successor_list = Arc::new(Mutex::new(vec![info.clone(); SUCCESSOR_LIST_SIZE]));
         let predecessor = Arc::new(Mutex::new(None));
         let finger_table = Arc::new(Mutex::<Vec<NodeInfo>>::new(vec![info.clone(); M]));
         let data = Arc::new(Mutex::new(HashMap::new()));
@@ -76,6 +80,7 @@ impl<T: NetworkClient> ChordNode<T> {
         ChordNode {
             info,
             successor,
+            successor_list,
             predecessor,
             finger_table,
             data,
@@ -94,6 +99,7 @@ impl<T: NetworkClient> ChordNode<T> {
         };
 
         let successor = Arc::new(Mutex::new(info.clone()));
+        let successor_list = Arc::new(Mutex::new(vec![info.clone(); SUCCESSOR_LIST_SIZE]));
         let predecessor = Arc::new(Mutex::new(None));
         let finger_table = Arc::new(Mutex::<Vec<NodeInfo>>::new(vec![info.clone(); M]));
         let data = Arc::new(Mutex::new(HashMap::new()));
@@ -101,6 +107,7 @@ impl<T: NetworkClient> ChordNode<T> {
         ChordNode {
             info,
             successor,
+            successor_list,
             predecessor,
             finger_table,
             data,
@@ -417,6 +424,8 @@ impl<T: NetworkClient> ChordNode<T> {
     async fn start_new_network(&self) {
         let mut successor = self.successor.lock().unwrap();
         *successor = self.info.clone();
+        let mut successor_list = self.successor_list.lock().unwrap();
+        *successor_list = vec![self.info.clone(); SUCCESSOR_LIST_SIZE];
         let mut predecessor = self.predecessor.lock().unwrap();
         *predecessor = None;
         log_info!(
@@ -456,8 +465,23 @@ impl<T: NetworkClient> ChordNode<T> {
                     "Error: Failed to get successor from predecessor {}.",
                     predecessor.address
                 );
-                // Fallback to self's successor if remote call fails
-                self.successor.lock().unwrap().clone()
+                
+                // Try to use successor list as fallback
+                if let Some(next_available) = self.find_next_available_successor().await {
+                    log_info!(
+                        self.info.address,
+                        "Using backup successor {} after failure",
+                        next_available.address
+                    );
+                    next_available
+                } else {
+                    // Last resort: return self's successor
+                    log_error!(
+                        self.info.address,
+                        "No backup successors available, using current successor"
+                    );
+                    self.successor.lock().unwrap().clone()
+                }
             }
         }
     }
@@ -708,6 +732,78 @@ impl<T: NetworkClient> ChordNode<T> {
         // For now, we'll leave them as they are, to be updated by gossip.
     }
 
+    // Find the next available successor from the successor list
+    async fn find_next_available_successor(&self) -> Option<NodeInfo> {
+        let successor_list = self.successor_list.lock().unwrap().clone();
+        
+        for successor in successor_list {
+            if successor.id == self.info.id {
+                continue;
+            }
+            
+            // Try to ping the successor
+            match self
+                .network_client
+                .call_node(&successor.address, DhtMessage::Ping)
+                .await
+            {
+                Ok(DhtMessage::Pong) => {
+                    return Some(successor);
+                }
+                _ => {
+                    debug!(
+                        "[{}] Successor {} is unreachable",
+                        self.info.address, successor.address
+                    );
+                }
+            }
+        }
+        
+        None
+    }
+
+    // Update the successor list by querying successors
+    async fn update_successor_list(&self) {
+        let current_successor = self.successor.lock().unwrap().clone();
+        let mut new_list = vec![current_successor.clone()];
+        
+        let mut current = current_successor;
+        for _i in 1..SUCCESSOR_LIST_SIZE {
+            if current.id == self.info.id {
+                // We've looped back to ourselves
+                break;
+            }
+            
+            match self
+                .network_client
+                .call_node(&current.address, DhtMessage::GetSuccessor)
+                .await
+            {
+                Ok(DhtMessage::FoundSuccessor { id, address, api_address }) => {
+                    let next = NodeInfo { id, address, api_address };
+                    if next.id == self.info.id {
+                        // Don't include ourselves in the successor list
+                        break;
+                    }
+                    new_list.push(next.clone());
+                    current = next;
+                }
+                _ => {
+                    debug!("[{}] Failed to get successor from {}", self.info.address, current.address);
+                    break;
+                }
+            }
+        }
+        
+        // Fill remaining slots with the last known successor
+        while new_list.len() < SUCCESSOR_LIST_SIZE {
+            new_list.push(new_list.last().unwrap().clone());
+        }
+        
+        let mut successor_list = self.successor_list.lock().unwrap();
+        *successor_list = new_list;
+    }
+
     pub async fn stabilize(&self) {
         let successor = self.successor.lock().unwrap().clone();
 
@@ -736,11 +832,42 @@ impl<T: NetworkClient> ChordNode<T> {
             self.info.address, successor.address
         );
 
-        match self
+        let predecessor_response = self
             .network_client
             .call_node(&successor.address, DhtMessage::GetPredecessor)
-            .await
-        {
+            .await;
+
+        // Handle successor failure
+        if predecessor_response.is_err() {
+            log_error!(
+                self.info.address,
+                "Successor {} is unreachable, finding next available successor",
+                successor.address
+            );
+            
+            if let Some(new_successor) = self.find_next_available_successor().await {
+                {
+                    let mut successor_lock = self.successor.lock().unwrap();
+                    *successor_lock = new_successor.clone();
+                }
+                log_info!(
+                    self.info.address,
+                    "Updated successor to {} after failure",
+                    new_successor.address
+                );
+                // Update successor list after changing successor
+                self.update_successor_list().await;
+                return;
+            } else {
+                log_error!(
+                    self.info.address,
+                    "No available successors found, network may be partitioned"
+                );
+                return;
+            }
+        }
+
+        match predecessor_response {
             Ok(DhtMessage::Predecessor {
                 id: Some(x_id),
                 address: Some(x_address),
@@ -818,6 +945,9 @@ impl<T: NetworkClient> ChordNode<T> {
                 log_error!(self.info.address, "Error notifying successor: {}", e);
             }
         }
+        
+        // Update successor list after stabilization
+        self.update_successor_list().await;
     }
 
     pub async fn notify(&self, n_prime: NodeInfo) {
@@ -1041,19 +1171,47 @@ impl<T: NetworkClient> ChordNode<T> {
                 .await
             {
                 Ok(DhtMessage::Pong) => {
-                    // Predecessor is alive
-                }
-                _ => {
-                    // Predecessor is dead, clear it
-                    let mut p = self.predecessor.lock().unwrap();
-                    *p = None;
                     debug!(
-                        "[{}] Predecessor {} is dead, clearing predecessor",
+                        "[{}] Predecessor {} is alive",
                         self.info.address, predecessor.address
                     );
                 }
+                _ => {
+                    // Predecessor is dead, clear it
+                    {
+                        let mut p = self.predecessor.lock().unwrap();
+                        *p = None;
+                    }
+                    log_info!(
+                        self.info.address,
+                        "Predecessor {} is unreachable, cleared predecessor",
+                        predecessor.address
+                    );
+                    
+                    // Also check if this affects our data responsibility
+                    // If we had a predecessor and it's gone, we might need to
+                    // take over its key range
+                    self.reconcile_data_after_predecessor_failure(predecessor).await;
+                }
             }
         }
+    }
+    
+    // Handle data reconciliation after predecessor failure
+    async fn reconcile_data_after_predecessor_failure(&self, failed_predecessor: NodeInfo) {
+        debug!(
+            "[{}] Reconciling data after predecessor {} failure",
+            self.info.address, failed_predecessor.address
+        );
+        
+        // In a production system, we would:
+        // 1. Query other nodes for data that should now be our responsibility
+        // 2. Ensure proper replication of data
+        // For now, we'll just log this event
+        log_info!(
+            self.info.address,
+            "Data reconciliation needed after predecessor failure"
+        );
     }
 
     pub fn debug_ring_state(&self) {
