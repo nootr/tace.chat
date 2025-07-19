@@ -6,3 +6,9 @@ members = [
     "webclient",
     "collector",
 ]
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+indexing_slicing = "warn"

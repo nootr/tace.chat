@@ -15,8 +15,18 @@ pub fn node_id_to_biguint(id: &dht_messages::NodeId) -> BigUint {
 pub fn biguint_to_node_id(biguint: &BigUint) -> dht_messages::NodeId {
     let bytes = biguint.to_bytes_be();
     let mut id = [0u8; 20];
-    let start_index = 20 - bytes.len();
-    id[start_index..].copy_from_slice(&bytes);
+    if bytes.len() <= 20 {
+        let start_index = 20 - bytes.len();
+        if let Some(target_slice) = id.get_mut(start_index..) {
+            target_slice.copy_from_slice(&bytes);
+        }
+    } else {
+        // If bytes is longer than 20, take only the last 20 bytes
+        let start = bytes.len().saturating_sub(20);
+        if let Some(source_slice) = bytes.get(start..) {
+            id.copy_from_slice(source_slice);
+        }
+    }
     id
 }
 

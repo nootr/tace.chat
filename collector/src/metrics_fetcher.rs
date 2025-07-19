@@ -33,7 +33,13 @@ pub async fn fetch_and_store_metrics(
     match client.get(uri).await {
         Ok(res) => {
             if res.status().is_success() {
-                let body_bytes = res.into_body().collect().await.unwrap().to_bytes();
+                let body_bytes = match res.into_body().collect().await {
+                    Ok(collected) => collected.to_bytes(),
+                    Err(e) => {
+                        error!("Failed to read response body: {}", e);
+                        return;
+                    }
+                };
                 match serde_json::from_slice::<NetworkMetrics>(&body_bytes) {
                     Ok(metrics) => {
                         info!("Successfully fetched metrics: {:?}", metrics);

@@ -40,10 +40,16 @@ pub async fn metrics_api_handler(
 
     let conn = db_conn.lock().await;
     match db::get_latest_metrics(&conn) {
-        Ok(metrics) => {
-            let json_response = serde_json::to_string(&metrics).unwrap();
-            Ok(format_response(StatusCode::OK, json_response))
-        }
+        Ok(metrics) => match serde_json::to_string(&metrics) {
+            Ok(json_response) => Ok(format_response(StatusCode::OK, json_response)),
+            Err(e) => {
+                error!("Failed to serialize metrics to JSON: {}", e);
+                Ok(format_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({ "error": "Failed to serialize metrics" }).to_string(),
+                ))
+            }
+        },
         Err(e) => {
             error!("Failed to retrieve metrics from DB: {}", e);
             Ok(format_response(

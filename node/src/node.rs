@@ -220,9 +220,18 @@ impl<T: NetworkClient> ChordNode<T> {
             self.info.address,
             bind_address
         );
-        let listener = TcpListener::bind(bind_address)
-            .await
-            .expect("Failed to bind to address");
+        let listener = match TcpListener::bind(bind_address).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                log_error!(
+                    self.info.address,
+                    "Failed to bind to address {}: {}",
+                    bind_address,
+                    e
+                );
+                return;
+            }
+        };
 
         let node_clone = self.clone(); // Clone the Arc for each connection
         loop {
@@ -253,7 +262,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) {
-        /// Check connection limit
+        // Check connection limit
         let current_connections = self.active_connections.fetch_add(1, Ordering::Relaxed);
         if current_connections >= MAX_CONNECTIONS {
             self.active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -264,7 +273,7 @@ impl<T: NetworkClient> ChordNode<T> {
             return;
         }
 
-        /// Ensure connection count is decremented on exit
+        // Ensure connection count is decremented on exit
         let _guard = ConnectionGuard {
             counter: self.active_connections.clone(),
         };
@@ -282,7 +291,12 @@ impl<T: NetworkClient> ChordNode<T> {
                         log_error!(self.info.address, "Message too large, dropping connection");
                         return;
                     }
-                    buffer.extend_from_slice(&temp_buf[..n]);
+                    if let Some(slice) = temp_buf.get(..n) {
+                        buffer.extend_from_slice(slice);
+                    } else {
+                        log_error!(self.info.address, "Invalid read size from socket");
+                        return;
+                    }
                 }
                 Err(e) => {
                     log_error!(self.info.address, "Failed to read from socket: {}", e);
@@ -313,11 +327,17 @@ impl<T: NetworkClient> ChordNode<T> {
                         }
                     }
                     DhtMessage::GetSuccessor => {
-                        let successor = self.successor.lock().unwrap().clone();
-                        DhtMessage::FoundSuccessor {
-                            id: successor.id,
-                            address: successor.address,
-                            api_address: successor.api_address,
+                        if let Some(successor_guard) = self.safe_lock(&self.successor) {
+                            let successor = successor_guard.clone();
+                            DhtMessage::FoundSuccessor {
+                                id: successor.id,
+                                address: successor.address,
+                                api_address: successor.api_address,
+                            }
+                        } else {
+                            DhtMessage::Error {
+                                message: "Failed to access successor information".to_string(),
+                            }
                         }
                     }
                     DhtMessage::ClosestPrecedingNode { id } => {
@@ -337,11 +357,17 @@ impl<T: NetworkClient> ChordNode<T> {
                         DhtMessage::Retrieved { key, value }
                     }
                     DhtMessage::GetPredecessor => {
-                        let predecessor = self.predecessor.lock().unwrap().clone();
-                        DhtMessage::Predecessor {
-                            id: predecessor.as_ref().map(|p| p.id),
-                            address: predecessor.as_ref().map(|p| p.address.clone()),
-                            api_address: predecessor.as_ref().map(|p| p.api_address.clone()),
+                        if let Some(predecessor_guard) = self.safe_lock(&self.predecessor) {
+                            let predecessor = predecessor_guard.clone();
+                            DhtMessage::Predecessor {
+                                id: predecessor.as_ref().map(|p| p.id),
+                                address: predecessor.as_ref().map(|p| p.address.clone()),
+                                api_address: predecessor.as_ref().map(|p| p.api_address.clone()),
+                            }
+                        } else {
+                            DhtMessage::Error {
+                                message: "Failed to access predecessor information".to_string(),
+                            }
                         }
                     }
                     DhtMessage::Notify {
@@ -708,7 +734,16 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Retrieves all key-value pairs in a given range
     pub async fn get_data_range(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<Vec<u8>>)> {
-        let data = self.data.lock().unwrap();
+        let data = match self.safe_lock(&self.data) {
+            Some(guard) => guard,
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to acquire data lock for range query"
+                );
+                return Vec::new();
+            }
+        };
         let mut result = Vec::new();
 
         for (key, value) in data.iter() {
@@ -779,16 +814,21 @@ impl<T: NetworkClient> ChordNode<T> {
             }
         };
 
-        {
-            let mut successor = self.successor.lock().unwrap();
+        if !self.safe_update(&self.successor, |successor| {
             *successor = successor_info.clone();
-            log_info!(
+        }) {
+            log_error!(
                 self.info.address,
-                "Joined network. Successor: {} at {}",
-                hex::encode(successor.id),
-                successor.address
+                "Failed to update successor after joining"
             );
+            return;
         }
+        log_info!(
+            self.info.address,
+            "Joined network. Successor: {} at {}",
+            hex::encode(successor_info.id),
+            successor_info.address
+        );
 
         // Request data from successor that should belong to us
         log_info!(
@@ -869,7 +909,16 @@ impl<T: NetworkClient> ChordNode<T> {
 
         // If the predecessor is this node, return our successor
         if predecessor.id == self.info.id {
-            return self.successor.lock().unwrap().clone();
+            return match self.safe_lock(&self.successor) {
+                Some(guard) => guard.clone(),
+                None => {
+                    log_error!(
+                        self.info.address,
+                        "Failed to access successor in find_successor"
+                    );
+                    self.info.clone() // Fallback to self
+                }
+            };
         }
 
         // Otherwise, get the successor of the predecessor
@@ -908,7 +957,16 @@ impl<T: NetworkClient> ChordNode<T> {
                         self.info.address,
                         "No backup successors available, using current successor"
                     );
-                    self.successor.lock().unwrap().clone()
+                    match self.safe_lock(&self.successor) {
+                        Some(guard) => guard.clone(),
+                        None => {
+                            log_error!(
+                                self.info.address,
+                                "Critical: failed to access successor in find_successor fallback"
+                            );
+                            self.info.clone()
+                        }
+                    }
                 }
             }
         }
@@ -940,7 +998,16 @@ impl<T: NetworkClient> ChordNode<T> {
     /// Finds the predecessor of an ID
     pub async fn find_predecessor(&self, id: NodeId) -> NodeInfo {
         let mut n_prime = self.info.clone();
-        let mut current_successor = self.successor.lock().unwrap().clone();
+        let mut current_successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access successor in find_predecessor"
+                );
+                return self.info.clone();
+            }
+        };
         let mut retry_count = 0;
         const MAX_RETRIES: u32 = 10;
 
@@ -993,7 +1060,16 @@ impl<T: NetworkClient> ChordNode<T> {
 
             // Get the successor of the new n_prime
             current_successor = if n_prime.id == self.info.id {
-                self.successor.lock().unwrap().clone()
+                match self.safe_lock(&self.successor) {
+                    Some(guard) => guard.clone(),
+                    None => {
+                        log_error!(
+                            self.info.address,
+                            "Failed to access successor in find_predecessor loop"
+                        );
+                        break;
+                    }
+                }
             } else {
                 match self
                     .network_client
@@ -1026,10 +1102,22 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Finds the node in the finger table that most immediately precedes `id`.
     async fn closest_preceding_node(&self, id: NodeId) -> NodeInfo {
-        let finger_table = self.finger_table.lock().unwrap();
+        let finger_table = match self.safe_lock(&self.finger_table) {
+            Some(guard) => guard,
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access finger table in closest_preceding_node"
+                );
+                return self.info.clone();
+            }
+        };
         // Iterate finger table in reverse
-        for i in (0..M).rev() {
-            let finger = &finger_table[i];
+        for i in (0..M.min(finger_table.len())).rev() {
+            let finger = match finger_table.get(i) {
+                Some(f) => f,
+                None => continue,
+            };
             // If finger is between current node and id (exclusive of current node, exclusive of id)
             if tace_lib::is_between(&finger.id, &self.info.id, &id) {
                 return finger.clone();
@@ -1041,7 +1129,13 @@ impl<T: NetworkClient> ChordNode<T> {
     /// Handles a ShareMetrics message by averaging with local metrics
     /// and returning the updated local metrics.
     pub async fn handle_share_metrics(&self, incoming_metrics: NetworkMetrics) -> NetworkMetrics {
-        let mut local_metrics = self.metrics.lock().unwrap();
+        let mut local_metrics = match self.safe_lock(&self.metrics) {
+            Some(guard) => guard,
+            None => {
+                log_error!(self.info.address, "Failed to acquire metrics lock");
+                return incoming_metrics; // Return the incoming metrics as fallback
+            }
+        };
 
         // Average the metrics
         local_metrics.node_churn_rate =
@@ -1077,8 +1171,26 @@ impl<T: NetworkClient> ChordNode<T> {
         self.update_local_metrics().await;
 
         // Collect all known nodes (successor + finger table)
-        let successor = self.successor.lock().unwrap().clone();
-        let finger_table = self.finger_table.lock().unwrap().clone();
+        let successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access successor for metrics sharing"
+                );
+                return;
+            }
+        };
+        let finger_table = match self.safe_lock(&self.finger_table) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access finger table for metrics sharing"
+                );
+                return;
+            }
+        };
 
         // If we're the only node, no need to update
         if successor.id == self.info.id {
@@ -1106,14 +1218,29 @@ impl<T: NetworkClient> ChordNode<T> {
         }
 
         // Pick a random node from candidates
-        let random_node = candidate_nodes.choose(&mut rand::thread_rng()).unwrap();
+        let random_node = match candidate_nodes.choose(&mut rand::thread_rng()) {
+            Some(node) => node,
+            None => {
+                log_error!(
+                    self.info.address,
+                    "No candidate nodes available for metrics sharing"
+                );
+                return;
+            }
+        };
 
         debug!(
             "[{}] Sharing metrics with random neighbor {}",
             self.info.address, random_node.address
         );
 
-        let local_metrics = self.metrics.lock().unwrap().clone();
+        let local_metrics = match self.safe_lock(&self.metrics) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(self.info.address, "Failed to access metrics for sharing");
+                return;
+            }
+        };
 
         // Get neighbor's estimate
         match self
@@ -1145,15 +1272,40 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Updates the local metrics based on the node's current state
     async fn update_local_metrics(&self) {
-        let mut local_metrics = self.metrics.lock().unwrap();
+        let mut local_metrics = match self.safe_lock(&self.metrics) {
+            Some(guard) => guard,
+            None => {
+                log_error!(self.info.address, "Failed to access metrics for update");
+                return;
+            }
+        };
 
         // Update routing table health
-        let finger_table = self.finger_table.lock().unwrap();
+        let finger_table = match self.safe_lock(&self.finger_table) {
+            Some(guard) => guard,
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access finger table for metrics update"
+                );
+                return;
+            }
+        };
         let filled_slots = finger_table.iter().filter(|n| n.id != self.info.id).count();
         local_metrics.routing_table_health = filled_slots as f64 / M as f64;
+        drop(finger_table);
 
         // Update local key count (actual keys stored on this node)
-        let data = self.data.lock().unwrap();
+        let data = match self.safe_lock(&self.data) {
+            Some(guard) => guard,
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access data for metrics update"
+                );
+                return;
+            }
+        };
         local_metrics.local_key_count = data.len() as u64;
         drop(data);
 
@@ -1185,7 +1337,13 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Find the next available successor from the successor list
     async fn find_next_available_successor(&self) -> Option<NodeInfo> {
-        let successor_list = self.successor_list.lock().unwrap().clone();
+        let successor_list = match self.safe_lock(&self.successor_list) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(self.info.address, "Failed to access successor list");
+                return None;
+            }
+        };
 
         for successor in successor_list {
             if successor.id == self.info.id {
@@ -1215,7 +1373,16 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Update the successor list by querying successors
     async fn update_successor_list(&self) {
-        let current_successor = self.successor.lock().unwrap().clone();
+        let current_successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access successor for list update"
+                );
+                return;
+            }
+        };
         let mut new_list = vec![current_successor.clone()];
 
         let mut current = current_successor;
@@ -1259,11 +1426,18 @@ impl<T: NetworkClient> ChordNode<T> {
 
         // Fill remaining slots with the last known successor
         while new_list.len() < SUCCESSOR_LIST_SIZE {
-            new_list.push(new_list.last().unwrap().clone());
+            if let Some(last) = new_list.last() {
+                new_list.push(last.clone());
+            } else {
+                break;
+            }
         }
 
-        let mut successor_list = self.successor_list.lock().unwrap();
-        *successor_list = new_list;
+        if !self.safe_update(&self.successor_list, |list| {
+            *list = new_list;
+        }) {
+            log_error!(self.info.address, "Failed to update successor list");
+        }
     }
 
     pub async fn stabilize(&self) {
@@ -1290,9 +1464,15 @@ impl<T: NetworkClient> ChordNode<T> {
                 "[{}] Stabilize: single node network, clearing predecessor",
                 self.info.address
             );
-            let mut predecessor = self.predecessor.lock().unwrap();
-            if predecessor.is_some() {
-                *predecessor = None;
+            if !self.safe_update(&self.predecessor, |pred| {
+                if pred.is_some() {
+                    *pred = None;
+                }
+            }) {
+                log_error!(
+                    self.info.address,
+                    "Failed to clear predecessor in stabilize"
+                );
             }
             return;
         }
@@ -1366,8 +1546,11 @@ impl<T: NetworkClient> ChordNode<T> {
                         "[{}] Stabilize: updating successor from {} to {}",
                         self.info.address, successor.address, x.address
                     );
-                    let mut current_successor = self.successor.lock().unwrap();
-                    *current_successor = x.clone();
+                    if !self.safe_update(&self.successor, |succ| {
+                        *succ = x.clone();
+                    }) {
+                        log_error!(self.info.address, "Failed to update successor in stabilize");
+                    }
                 } else {
                     debug!(
                         "[{}] Stabilize: keeping current successor {}",
@@ -1394,7 +1577,16 @@ impl<T: NetworkClient> ChordNode<T> {
         }
 
         // Notify successor that we are its predecessor
-        let current_successor = self.successor.lock().unwrap().clone();
+        let current_successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access successor for notify in stabilize"
+                );
+                return;
+            }
+        };
         debug!(
             "[{}] Stabilize: notifying successor {} that we are its predecessor",
             self.info.address, current_successor.address
@@ -1438,7 +1630,13 @@ impl<T: NetworkClient> ChordNode<T> {
 
         // Scope for the lock to ensure it's dropped before async operations
         {
-            let mut predecessor = self.predecessor.lock().unwrap();
+            let mut predecessor = match self.safe_lock(&self.predecessor) {
+                Some(guard) => guard,
+                None => {
+                    log_error!(self.info.address, "Failed to access predecessor in notify");
+                    return;
+                }
+            };
             current_pred = predecessor.clone();
 
             // If predecessor is nil or n_prime is between predecessor and self
@@ -1448,20 +1646,15 @@ impl<T: NetworkClient> ChordNode<T> {
                     self.info.address, n_prime.address
                 );
                 true
-            } else {
-                let is_between = tace_lib::is_between(
-                    &n_prime.id,
-                    &predecessor.as_ref().unwrap().id,
-                    &self.info.id,
-                );
+            } else if let Some(pred) = predecessor.as_ref() {
+                let is_between = tace_lib::is_between(&n_prime.id, &pred.id, &self.info.id);
                 debug!(
                     "[{}] Notify: current pred={}, candidate={}, is_between={}",
-                    self.info.address,
-                    predecessor.as_ref().unwrap().address,
-                    n_prime.address,
-                    is_between
+                    self.info.address, pred.address, n_prime.address, is_between
                 );
                 is_between
+            } else {
+                false
             };
 
             if should_update {
@@ -1474,13 +1667,16 @@ impl<T: NetworkClient> ChordNode<T> {
                 *predecessor = Some(n_prime.clone());
 
                 // Also check if we need to update successor in single-node case
-                let mut successor = self.successor.lock().unwrap();
-                if successor.id == self.info.id {
-                    debug!(
-                        "[{}] Notify: was single node, updating successor to {}",
-                        self.info.address, n_prime.address
-                    );
-                    *successor = n_prime.clone();
+                if !self.safe_update(&self.successor, |successor| {
+                    if successor.id == self.info.id {
+                        debug!(
+                            "[{}] Notify: was single node, updating successor to {}",
+                            self.info.address, n_prime.address
+                        );
+                        *successor = n_prime.clone();
+                    }
+                }) {
+                    log_error!(self.info.address, "Failed to update successor in notify");
                 }
             }
         } // Locks are dropped here
@@ -1543,8 +1739,14 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     fn calculate_local_network_size_estimate(&self) -> f64 {
-        let successor = self.successor.lock().unwrap();
-        let predecessor = self.predecessor.lock().unwrap();
+        let successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard,
+            None => return 1.0, // Default to single node
+        };
+        let predecessor = match self.safe_lock(&self.predecessor) {
+            Some(guard) => guard,
+            None => return 1.0, // Default to single node
+        };
 
         // If we don't have a predecessor, use ourselves
         let pred_id = predecessor.as_ref().map(|p| p.id).unwrap_or(self.info.id);
@@ -1634,12 +1836,26 @@ impl<T: NetworkClient> ChordNode<T> {
         let successor = self.find_successor(target_id).await;
 
         // Update the finger table
-        let mut finger_table = self.finger_table.lock().unwrap();
-        finger_table[i] = successor;
+        if !self.safe_update(&self.finger_table, |table| {
+            if let Some(entry) = table.get_mut(i) {
+                *entry = successor;
+            }
+        }) {
+            log_error!(self.info.address, "Failed to update finger table");
+        }
     }
 
     pub async fn check_predecessor(&self) {
-        let predecessor_option = self.predecessor.lock().unwrap().clone();
+        let predecessor_option = match self.safe_lock(&self.predecessor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to access predecessor in check_predecessor"
+                );
+                return;
+            }
+        };
         if let Some(predecessor) = predecessor_option {
             // Send a simple message to check if predecessor is alive
             match self
@@ -1655,9 +1871,10 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
                 _ => {
                     // Predecessor is dead, clear it
-                    {
-                        let mut p = self.predecessor.lock().unwrap();
+                    if !self.safe_update(&self.predecessor, |p| {
                         *p = None;
+                    }) {
+                        log_error!(self.info.address, "Failed to clear dead predecessor");
                     }
                     log_info!(
                         self.info.address,
@@ -1752,7 +1969,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     /// Get nodes that might have replicas for a given key range
-    async fn get_replica_nodes_for_range(&self, start: NodeId, end: NodeId) -> Vec<NodeInfo> {
+    async fn get_replica_nodes_for_range(&self, _start: NodeId, _end: NodeId) -> Vec<NodeInfo> {
         let mut nodes = Vec::new();
 
         // Add our successor list - they likely have replicas
@@ -1802,8 +2019,14 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub fn debug_ring_state(&self) {
-        let successor = self.successor.lock().unwrap();
-        let predecessor = self.predecessor.lock().unwrap();
+        let successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard,
+            None => return,
+        };
+        let predecessor = match self.safe_lock(&self.predecessor) {
+            Some(guard) => guard,
+            None => return,
+        };
 
         debug!(
             "[{}] Ring state: self={}, pred={}, succ={}",

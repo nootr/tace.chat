@@ -21,16 +21,22 @@ async fn main() {
         .or_else(|_| env::var("NODE_PORT"))
         .unwrap_or_else(|_| "6512".to_string())
         .parse()
-        .expect("BIND_P2P_PORT must be a valid integer");
+        .unwrap_or_else(|_| {
+            eprintln!("Error: BIND_P2P_PORT must be a valid integer, using default 6512");
+            6512
+        });
     let advertise_p2p_host = env::var("ADVERTISE_P2P_HOST")
         .or_else(|_| env::var("ADVERTISE_HOST"))
         .ok()
         .filter(|s| !s.is_empty())
-        .expect("ADVERTISE_P2P_HOST must be set (no default)");
+        .unwrap_or_else(|| {
+            eprintln!("Error: ADVERTISE_P2P_HOST must be set, using localhost as fallback");
+            "localhost".to_string()
+        });
     let advertise_p2p_port: u16 = env::var("ADVERTISE_P2P_PORT")
         .unwrap_or_else(|_| bind_p2p_port.to_string())
         .parse()
-        .expect("ADVERTISE_P2P_PORT must be a valid integer");
+        .unwrap_or(bind_p2p_port);
 
     // API Configuration
     let bind_api_host = env::var("BIND_API_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -38,14 +44,20 @@ async fn main() {
         .or_else(|_| env::var("API_PORT"))
         .unwrap_or_else(|_| "80".to_string())
         .parse()
-        .expect("BIND_API_PORT must be a valid integer");
+        .unwrap_or_else(|_| {
+            eprintln!("Error: BIND_API_PORT must be a valid integer, using default 80");
+            80
+        });
     let advertise_api_host = env::var("ADVERTISE_API_HOST")
         .or_else(|_| env::var("API_HOST"))
         .unwrap_or_else(|_| advertise_p2p_host.clone());
     let advertise_api_port: u16 = env::var("ADVERTISE_API_PORT")
         .unwrap_or_else(|_| "443".to_string())
         .parse()
-        .expect("ADVERTISE_API_PORT must be a valid integer");
+        .unwrap_or_else(|_| {
+            eprintln!("Error: ADVERTISE_API_PORT must be a valid integer, using default 443");
+            443
+        });
     let is_bootstrap = env::var("IS_BOOTSTRAP")
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -60,7 +72,10 @@ async fn main() {
     let stabilization_interval: u64 = env::var("STABILIZATION_INTERVAL")
         .unwrap_or_else(|_| "5".to_string())
         .parse()
-        .expect("STABILIZATION_INTERVAL must be a valid integer");
+        .unwrap_or_else(|_| {
+            eprintln!("Error: STABILIZATION_INTERVAL must be a valid integer, using default 5");
+            5
+        });
 
     let bind_p2p_address = format!("{}:{}", bind_p2p_host, bind_p2p_port);
     let advertise_p2p_address = format!("{}:{}", advertise_p2p_host, advertise_p2p_port);
@@ -78,9 +93,10 @@ async fn main() {
     let node_for_api = node.clone();
     let bind_api_host_clone = bind_api_host.clone();
     tokio::spawn(async move {
-        run(&bind_api_host_clone, bind_api_port, node_for_api)
-            .await
-            .expect("Failed to run API server");
+        if let Err(e) = run(&bind_api_host_clone, bind_api_port, node_for_api).await {
+            log::error!("Failed to run API server: {}", e);
+            std::process::exit(1);
+        }
     });
 
     node.join(bootstrap_address).await;
@@ -116,10 +132,20 @@ async fn main() {
 
     // Spawn signal handler
     let signal_handle = tokio::spawn(async move {
-        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
-            .expect("Failed to register SIGINT handler");
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to register SIGTERM handler");
+        let mut sigint = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+            Ok(signal) => signal,
+            Err(e) => {
+                log::error!("Failed to register SIGINT handler: {}", e);
+                return;
+            }
+        };
+        let mut sigterm = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(signal) => signal,
+            Err(e) => {
+                log::error!("Failed to register SIGTERM handler: {}", e);
+                return;
+            }
+        };
 
         tokio::select! {
             _ = sigint.recv() => {
