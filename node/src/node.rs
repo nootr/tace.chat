@@ -5,6 +5,7 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tace_lib::dht_messages::{DhtMessage, NodeId};
 use tace_lib::metrics::NetworkMetrics;
@@ -12,6 +13,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::network_client::NetworkClient;
+
+// Helper struct to automatically decrement connection count on drop
+struct ConnectionGuard {
+    counter: Arc<AtomicU32>,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 macro_rules! log_info {
     ($address:expr, $($arg:tt)*) => ({
@@ -27,6 +39,8 @@ macro_rules! log_error {
 
 const M: usize = 160; // Number of bits in Chord ID space (SHA-1 produces 160-bit hash)
 const SUCCESSOR_LIST_SIZE: usize = 3; // Number of successors to maintain for fault tolerance
+const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit to prevent DoS
+const MAX_CONNECTIONS: u32 = 100; // Maximum concurrent connections
 
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
@@ -45,6 +59,8 @@ pub struct ChordNode<T: NetworkClient> {
     pub data: Arc<Mutex<HashMap<NodeId, Vec<Vec<u8>>>>>,
     pub network_client: Arc<T>,
     pub metrics: Arc<Mutex<NetworkMetrics>>,
+    pub shutdown_signal: Arc<AtomicBool>,
+    pub active_connections: Arc<AtomicU32>,
 }
 
 impl<T: NetworkClient> Clone for ChordNode<T> {
@@ -58,6 +74,8 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
             data: self.data.clone(), // This clones the Arc, not the HashMap
             network_client: self.network_client.clone(),
             metrics: self.metrics.clone(),
+            shutdown_signal: self.shutdown_signal.clone(),
+            active_connections: self.active_connections.clone(),
         }
     }
 }
@@ -86,6 +104,8 @@ impl<T: NetworkClient> ChordNode<T> {
             data,
             network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
+            active_connections: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -113,6 +133,8 @@ impl<T: NetworkClient> ChordNode<T> {
             data,
             network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
+            active_connections: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -136,8 +158,18 @@ impl<T: NetworkClient> ChordNode<T> {
 
         let node_clone = self.clone(); // Clone the Arc for each connection
         loop {
+            // Check for shutdown signal
+            if self.shutdown_signal.load(Ordering::Relaxed) {
+                log_info!(
+                    self.info.address,
+                    "Shutdown signal received, stopping server"
+                );
+                break;
+            }
+
             match listener.accept().await {
-                Ok((socket, _)) => {
+                Ok((socket, addr)) => {
+                    debug!("[{}] Accepted connection from {}", self.info.address, addr);
                     let node = node_clone.clone();
                     tokio::spawn(async move {
                         node.handle_connection(socket).await;
@@ -145,17 +177,50 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
                 Err(e) => {
                     log_error!(self.info.address, "Failed to accept connection: {}", e);
+                    // Add small delay to prevent tight loop on persistent errors
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
         }
     }
 
     async fn handle_connection(&self, mut socket: TcpStream) {
-        let mut buffer = Vec::new();
-        // Read the entire message
-        if let Err(e) = socket.read_to_end(&mut buffer).await {
-            log_error!(self.info.address, "Failed to read from socket: {}", e);
+        // Check connection limit
+        let current_connections = self.active_connections.fetch_add(1, Ordering::Relaxed);
+        if current_connections >= MAX_CONNECTIONS {
+            self.active_connections.fetch_sub(1, Ordering::Relaxed);
+            log_error!(
+                self.info.address,
+                "Connection limit exceeded, rejecting connection"
+            );
             return;
+        }
+
+        // Ensure connection count is decremented on exit
+        let _guard = ConnectionGuard {
+            counter: self.active_connections.clone(),
+        };
+
+        let peer_addr = socket.peer_addr().ok();
+        let mut buffer = Vec::with_capacity(8192); // Start with reasonable capacity
+
+        // Read message with length limit
+        loop {
+            let mut temp_buf = vec![0u8; 1024];
+            match socket.read(&mut temp_buf).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    if buffer.len() + n > MAX_MESSAGE_SIZE {
+                        log_error!(self.info.address, "Message too large, dropping connection");
+                        return;
+                    }
+                    buffer.extend_from_slice(&temp_buf[..n]);
+                }
+                Err(e) => {
+                    log_error!(self.info.address, "Failed to read from socket: {}", e);
+                    return;
+                }
+            }
         }
 
         match bincode::deserialize::<DhtMessage>(&buffer) {
@@ -247,12 +312,14 @@ impl<T: NetworkClient> ChordNode<T> {
                     }
                 };
                 let encoded_response = bincode::serialize(&response).unwrap();
-                log_info!(
-                    self.info.address,
-                    "Sending response to {}: {:?}",
-                    socket.peer_addr().unwrap(),
-                    response
-                );
+                if let Some(addr) = peer_addr {
+                    log_info!(
+                        self.info.address,
+                        "Sending response to {}: {:?}",
+                        addr,
+                        response
+                    );
+                }
                 if let Err(e) = socket.write_all(&encoded_response).await {
                     log_error!(
                         self.info.address,
@@ -1226,6 +1293,29 @@ impl<T: NetworkClient> ChordNode<T> {
         );
     }
 
+    pub fn shutdown(&self) {
+        log_info!(self.info.address, "Initiating graceful shutdown");
+        self.shutdown_signal.store(true, Ordering::Relaxed);
+
+        // Wait for active connections to finish (with timeout)
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(30);
+
+        while self.active_connections.load(Ordering::Relaxed) > 0 {
+            if start.elapsed() > timeout {
+                log_error!(
+                    self.info.address,
+                    "Shutdown timeout reached with {} active connections",
+                    self.active_connections.load(Ordering::Relaxed)
+                );
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        log_info!(self.info.address, "Shutdown complete");
+    }
+
     pub fn debug_ring_state(&self) {
         let successor = self.successor.lock().unwrap();
         let predecessor = self.predecessor.lock().unwrap();
@@ -1348,6 +1438,8 @@ mod tests {
             data: Arc::new(Mutex::new(HashMap::new())),
             network_client: mock_network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
+            active_connections: Arc::new(AtomicU32::new(0)),
         };
 
         // Test case 1: ID is far away, should return the largest finger
@@ -1668,6 +1760,8 @@ mod tests {
             data: Arc::new(Mutex::new(HashMap::new())),
             network_client: node.network_client.clone(),
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
+            shutdown_signal: Arc::new(AtomicBool::new(false)),
+            active_connections: Arc::new(AtomicU32::new(0)),
         };
 
         // Test finding successor of ID 0 (wraparound case)

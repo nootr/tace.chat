@@ -7,6 +7,7 @@ use network_client::RealNetworkClient;
 use node::ChordNode;
 use std::env;
 use std::sync::Arc;
+use tokio::signal;
 
 #[tokio::main]
 async fn main() {
@@ -85,11 +86,22 @@ async fn main() {
     node.join(bootstrap_address).await;
 
     let node_clone_for_tasks = node.clone();
+    let node_clone_for_shutdown = node.clone();
 
-    tokio::spawn(async move {
+    // Spawn stabilization task
+    let stabilization_handle = tokio::spawn(async move {
         let node = node_clone_for_tasks;
 
         loop {
+            // Check for shutdown signal
+            if node
+                .shutdown_signal
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                log::info!("Stabilization task shutting down");
+                break;
+            }
+
             node.stabilize().await;
             node.fix_fingers().await;
             node.check_predecessor().await;
@@ -101,5 +113,44 @@ async fn main() {
         }
     });
 
-    node.start(&bind_p2p_address).await;
+    // Spawn signal handler
+    let signal_handle = tokio::spawn(async move {
+        let mut sigint = signal::unix::signal(signal::unix::SignalKind::interrupt())
+            .expect("Failed to register SIGINT handler");
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to register SIGTERM handler");
+
+        tokio::select! {
+            _ = sigint.recv() => {
+                log::info!("Received SIGINT (Ctrl+C), initiating graceful shutdown");
+            }
+            _ = sigterm.recv() => {
+                log::info!("Received SIGTERM, initiating graceful shutdown");
+            }
+        }
+
+        node_clone_for_shutdown.shutdown();
+    });
+
+    // Start the P2P server (this will block until shutdown)
+    let server_handle = tokio::spawn(async move {
+        node.start(&bind_p2p_address).await;
+    });
+
+    // Wait for either the server to finish or shutdown signal
+    tokio::select! {
+        _ = server_handle => {
+            log::info!("P2P server stopped");
+        }
+        _ = signal_handle => {
+            log::info!("Shutdown signal received");
+        }
+    }
+
+    // Wait for stabilization task to finish
+    if let Err(e) = stabilization_handle.await {
+        log::error!("Error waiting for stabilization task: {}", e);
+    }
+
+    log::info!("Node shutdown complete");
 }
