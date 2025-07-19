@@ -81,6 +81,37 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
 }
 
 impl<T: NetworkClient> ChordNode<T> {
+    // Helper method for safe mutex access - returns early on poisoned mutex
+    fn safe_lock<'a, U>(
+        &self,
+        mutex: &'a std::sync::Mutex<U>,
+    ) -> Option<std::sync::MutexGuard<'a, U>> {
+        match mutex.lock() {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                log_error!(
+                    self.info.address,
+                    "Mutex poisoned: {}. This indicates a critical error in another thread.",
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    // Helper method to safely update a mutex value
+    fn safe_update<U, F>(&self, mutex: &std::sync::Mutex<U>, update_fn: F) -> bool
+    where
+        F: FnOnce(&mut U),
+    {
+        match self.safe_lock(mutex) {
+            Some(mut guard) => {
+                update_fn(&mut *guard);
+                true
+            }
+            None => false,
+        }
+    }
     pub async fn new(address: String, api_address: String, network_client: Arc<T>) -> Self {
         let id = Self::generate_node_id(&address);
         let info = NodeInfo {
@@ -311,7 +342,13 @@ impl<T: NetworkClient> ChordNode<T> {
                         }
                     }
                 };
-                let encoded_response = bincode::serialize(&response).unwrap();
+                let encoded_response = match bincode::serialize(&response) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        log_error!(self.info.address, "Failed to serialize response: {}", e);
+                        return;
+                    }
+                };
                 if let Some(addr) = peer_addr {
                     log_info!(
                         self.info.address,
@@ -336,22 +373,35 @@ impl<T: NetworkClient> ChordNode<T> {
 
     // Stores a key-value pair in the DHT
     pub async fn store(&self, key: NodeId, value: Vec<u8>) {
-        let mut data = self.data.lock().unwrap();
-        let values = data.entry(key).or_default();
-        values.push(value);
-        log_info!(self.info.address, "Stored key: {}", hex::encode(key));
+        if let Some(mut data) = self.safe_lock(&self.data) {
+            let values = data.entry(key).or_default();
+            values.push(value);
+            log_info!(self.info.address, "Stored key: {}", hex::encode(key));
+        } else {
+            log_error!(
+                self.info.address,
+                "Failed to acquire data lock for store operation"
+            );
+        }
     }
 
     // Retrieves a value by key from the DHT
     pub async fn retrieve(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
-        let mut data = self.data.lock().unwrap();
-        let value = data.remove(&key);
-        if value.is_some() {
-            log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
+        if let Some(mut data) = self.safe_lock(&self.data) {
+            let value = data.remove(&key);
+            if value.is_some() {
+                log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
+            } else {
+                log_info!(self.info.address, "Key not found: {}", hex::encode(key));
+            }
+            value
         } else {
-            log_info!(self.info.address, "Key not found: {}", hex::encode(key));
+            log_error!(
+                self.info.address,
+                "Failed to acquire data lock for retrieve operation"
+            );
+            None
         }
-        value
     }
 
     // Retrieves all key-value pairs in a given range
@@ -489,16 +539,25 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     async fn start_new_network(&self) {
-        let mut successor = self.successor.lock().unwrap();
-        *successor = self.info.clone();
-        let mut successor_list = self.successor_list.lock().unwrap();
-        *successor_list = vec![self.info.clone(); SUCCESSOR_LIST_SIZE];
-        let mut predecessor = self.predecessor.lock().unwrap();
-        *predecessor = None;
-        log_info!(
-            self.info.address,
-            "Started new network. I am the only node."
-        );
+        let success = self.safe_update(&self.successor, |successor| {
+            *successor = self.info.clone();
+        }) && self.safe_update(&self.successor_list, |successor_list| {
+            *successor_list = vec![self.info.clone(); SUCCESSOR_LIST_SIZE];
+        }) && self.safe_update(&self.predecessor, |predecessor| {
+            *predecessor = None;
+        });
+
+        if success {
+            log_info!(
+                self.info.address,
+                "Started new network. I am the only node."
+            );
+        } else {
+            log_error!(
+                self.info.address,
+                "Failed to initialize new network due to mutex errors"
+            );
+        }
     }
 
     // Finds the successor of an ID
@@ -883,7 +942,16 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub async fn stabilize(&self) {
-        let successor = self.successor.lock().unwrap().clone();
+        let successor = match self.safe_lock(&self.successor) {
+            Some(guard) => guard.clone(),
+            None => {
+                log_error!(
+                    self.info.address,
+                    "Failed to acquire successor lock for stabilization"
+                );
+                return;
+            }
+        };
 
         debug!(
             "[{}] Stabilize: current successor is {}",
@@ -924,18 +992,24 @@ impl<T: NetworkClient> ChordNode<T> {
             );
 
             if let Some(new_successor) = self.find_next_available_successor().await {
-                {
-                    let mut successor_lock = self.successor.lock().unwrap();
-                    *successor_lock = new_successor.clone();
+                if self.safe_update(&self.successor, |successor| {
+                    *successor = new_successor.clone();
+                }) {
+                    log_info!(
+                        self.info.address,
+                        "Updated successor to {} after failure",
+                        new_successor.address
+                    );
+                    // Update successor list after changing successor
+                    self.update_successor_list().await;
+                    return;
+                } else {
+                    log_error!(
+                        self.info.address,
+                        "Failed to update successor after failure"
+                    );
+                    return;
                 }
-                log_info!(
-                    self.info.address,
-                    "Updated successor to {} after failure",
-                    new_successor.address
-                );
-                // Update successor list after changing successor
-                self.update_successor_list().await;
-                return;
             } else {
                 log_error!(
                     self.info.address,
