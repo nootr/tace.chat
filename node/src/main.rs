@@ -109,6 +109,7 @@ async fn main() {
                 node.debug_ring_state(); // Debug ring formation
             }
             node.share_and_update_metrics().await;
+            node.check_and_rebalance().await;
             tokio::time::sleep(tokio::time::Duration::from_secs(stabilization_interval)).await;
         }
     });

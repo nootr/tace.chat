@@ -31,6 +31,13 @@ pub struct NetworkMetrics {
 
     /// The estimated number of nodes in the network.
     pub network_size_estimate: f64,
+
+    /// Load balancing metrics
+    pub cpu_usage_percent: f32,
+    pub memory_usage_percent: f32,
+    pub disk_usage_percent: f32,
+    pub active_connections: u32,
+    pub request_rate_per_second: f32,
 }
 
 impl Default for NetworkMetrics {
@@ -44,6 +51,11 @@ impl Default for NetworkMetrics {
             local_key_count: 0,
             total_network_keys_estimate: 0.0,
             network_size_estimate: 1.0,
+            cpu_usage_percent: 0.0,
+            memory_usage_percent: 0.0,
+            disk_usage_percent: 0.0,
+            active_connections: 0,
+            request_rate_per_second: 0.0,
         }
     }
 }

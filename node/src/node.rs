@@ -42,6 +42,8 @@ const SUCCESSOR_LIST_SIZE: usize = 3; // Number of successors to maintain for fa
 const MAX_MESSAGE_SIZE: usize = 1024 * 1024; // 1MB limit to prevent DoS
 const MAX_CONNECTIONS: u32 = 100; // Maximum concurrent connections
 const REPLICATION_FACTOR: usize = 3; // Number of replicas for each data item
+const VIRTUAL_NODES_PER_NODE: usize = 32; // Number of virtual nodes per physical node for better load distribution
+const LOAD_BALANCE_THRESHOLD: f32 = 0.8; // Trigger rebalancing when load exceeds 80%
 
 #[derive(Debug, Clone)]
 pub struct NodeInfo {
@@ -58,6 +60,8 @@ pub struct ChordNode<T: NetworkClient> {
     pub predecessor: Arc<Mutex<Option<NodeInfo>>>,
     pub finger_table: Arc<Mutex<Vec<NodeInfo>>>,
     pub data: Arc<Mutex<HashMap<NodeId, Vec<Vec<u8>>>>>,
+    pub virtual_nodes: Arc<Mutex<Vec<NodeId>>>, // Virtual nodes for load balancing
+    pub node_loads: Arc<Mutex<HashMap<NodeId, f32>>>, // Load tracking for other nodes
     pub network_client: Arc<T>,
     pub metrics: Arc<Mutex<NetworkMetrics>>,
     pub shutdown_signal: Arc<AtomicBool>,
@@ -73,6 +77,8 @@ impl<T: NetworkClient> Clone for ChordNode<T> {
             predecessor: self.predecessor.clone(),
             finger_table: self.finger_table.clone(),
             data: self.data.clone(), // This clones the Arc, not the HashMap
+            virtual_nodes: self.virtual_nodes.clone(),
+            node_loads: self.node_loads.clone(),
             network_client: self.network_client.clone(),
             metrics: self.metrics.clone(),
             shutdown_signal: self.shutdown_signal.clone(),
@@ -126,6 +132,8 @@ impl<T: NetworkClient> ChordNode<T> {
         let predecessor = Arc::new(Mutex::new(None));
         let finger_table = Arc::new(Mutex::<Vec<NodeInfo>>::new(vec![info.clone(); M]));
         let data = Arc::new(Mutex::new(HashMap::new()));
+        let virtual_nodes = Arc::new(Mutex::new(Self::generate_virtual_nodes(&address)));
+        let node_loads = Arc::new(Mutex::new(HashMap::new()));
 
         ChordNode {
             info,
@@ -134,6 +142,8 @@ impl<T: NetworkClient> ChordNode<T> {
             predecessor,
             finger_table,
             data,
+            virtual_nodes,
+            node_loads,
             network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
@@ -155,6 +165,8 @@ impl<T: NetworkClient> ChordNode<T> {
         let predecessor = Arc::new(Mutex::new(None));
         let finger_table = Arc::new(Mutex::<Vec<NodeInfo>>::new(vec![info.clone(); M]));
         let data = Arc::new(Mutex::new(HashMap::new()));
+        let virtual_nodes = Arc::new(Mutex::new(Self::generate_virtual_nodes(&address)));
+        let node_loads = Arc::new(Mutex::new(HashMap::new()));
 
         ChordNode {
             info,
@@ -163,6 +175,8 @@ impl<T: NetworkClient> ChordNode<T> {
             predecessor,
             finger_table,
             data,
+            virtual_nodes,
+            node_loads,
             network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
@@ -174,6 +188,19 @@ impl<T: NetworkClient> ChordNode<T> {
         let mut hasher = Sha1::new();
         hasher.update(address.as_bytes());
         hasher.finalize().into()
+    }
+
+    // Generate virtual nodes for better load distribution
+    fn generate_virtual_nodes(address: &str) -> Vec<NodeId> {
+        let mut virtual_nodes = Vec::with_capacity(VIRTUAL_NODES_PER_NODE);
+        for i in 0..VIRTUAL_NODES_PER_NODE {
+            let vnode_key = format!("{}:{}", address, i);
+            let mut hasher = Sha1::new();
+            hasher.update(vnode_key.as_bytes());
+            virtual_nodes.push(hasher.finalize().into());
+        }
+        virtual_nodes.sort();
+        virtual_nodes
     }
 
     pub async fn start(&self, bind_address: &str) {
@@ -332,12 +359,21 @@ impl<T: NetworkClient> ChordNode<T> {
                             metrics: response_metrics,
                         }
                     }
-                    DhtMessage::ReplicateData { key, values, replica_id } => {
+                    DhtMessage::ReplicateData {
+                        key,
+                        values,
+                        replica_id,
+                    } => {
                         let success = self.handle_replicate_data(key, values, replica_id).await;
                         DhtMessage::ReplicationAck { key, success }
                     }
-                    DhtMessage::RequestReplicas { key_range_start, key_range_end } => {
-                        let replicas = self.handle_request_replicas(key_range_start, key_range_end).await;
+                    DhtMessage::RequestReplicas {
+                        key_range_start,
+                        key_range_end,
+                    } => {
+                        let replicas = self
+                            .handle_request_replicas(key_range_start, key_range_end)
+                            .await;
                         DhtMessage::ReplicaData { replicas }
                     }
                     _ => {
@@ -386,7 +422,11 @@ impl<T: NetworkClient> ChordNode<T> {
         if let Some(mut data) = self.safe_lock(&self.data) {
             let values = data.entry(key).or_default();
             values.push(value.clone());
-            log_info!(self.info.address, "Stored key locally: {}", hex::encode(key));
+            log_info!(
+                self.info.address,
+                "Stored key locally: {}",
+                hex::encode(key)
+            );
         } else {
             log_error!(
                 self.info.address,
@@ -402,83 +442,122 @@ impl<T: NetworkClient> ChordNode<T> {
     // Replicate data to backup nodes for fault tolerance
     async fn replicate_data(&self, key: NodeId, values: Vec<Vec<u8>>) {
         let replica_nodes = self.get_replica_nodes(key).await;
-        
+
         for (i, node) in replica_nodes.iter().enumerate() {
             if node.id == self.info.id {
                 continue; // Skip self
             }
-            
+
             let replica_id = (i + 1) as u8;
             let message = DhtMessage::ReplicateData {
                 key,
                 values: values.clone(),
                 replica_id,
             };
-            
+
             match self.network_client.call_node(&node.address, message).await {
                 Ok(DhtMessage::ReplicationAck { success: true, .. }) => {
                     debug!(
                         "[{}] Successfully replicated key {} to replica {} at {}",
-                        self.info.address, hex::encode(key), replica_id, node.address
+                        self.info.address,
+                        hex::encode(key),
+                        replica_id,
+                        node.address
                     );
                 }
                 Ok(DhtMessage::ReplicationAck { success: false, .. }) => {
                     log_error!(
                         self.info.address,
                         "Replication failed for key {} to replica {} at {}",
-                        hex::encode(key), replica_id, node.address
+                        hex::encode(key),
+                        replica_id,
+                        node.address
                     );
                 }
                 Err(e) => {
                     log_error!(
                         self.info.address,
                         "Failed to replicate key {} to {}: {}",
-                        hex::encode(key), node.address, e
+                        hex::encode(key),
+                        node.address,
+                        e
                     );
                 }
                 _ => {
                     log_error!(
                         self.info.address,
                         "Unexpected response when replicating key {} to {}",
-                        hex::encode(key), node.address
+                        hex::encode(key),
+                        node.address
                     );
                 }
             }
         }
     }
 
-    // Get the nodes responsible for storing replicas of this key
+    // Get the nodes responsible for storing replicas of this key with load balancing
     async fn get_replica_nodes(&self, key: NodeId) -> Vec<NodeInfo> {
         let mut replica_nodes = Vec::new();
-        
-        // Primary node (responsible for the key)
-        let primary = self.find_successor(key).await;
+
+        // Primary node (responsible for the key) - use virtual nodes for better distribution
+        let primary = self.find_successor_with_virtual_nodes(key).await;
         replica_nodes.push(primary.clone());
-        
-        // Get additional replica nodes from successor list
+
+        // Get additional replica nodes considering load balancing
+        let mut candidate_nodes = Vec::new();
+
+        // Collect candidates from successor list
         if let Some(successor_list) = self.safe_lock(&self.successor_list) {
-            let mut current_node = primary;
-            for _ in 1..REPLICATION_FACTOR {
-                // Find next node in the ring
-                if let Some(next_node) = successor_list.iter()
-                    .find(|node| node.id != current_node.id && 
-                                 !replica_nodes.iter().any(|r| r.id == node.id)) {
-                    replica_nodes.push(next_node.clone());
-                    current_node = next_node.clone();
-                } else {
-                    break; // No more unique nodes available
+            candidate_nodes.extend(successor_list.clone());
+        }
+
+        // Add some nodes from finger table for diversity
+        if let Some(finger_table) = self.safe_lock(&self.finger_table) {
+            for (i, node) in finger_table.iter().enumerate() {
+                if i % 3 == 0 {
+                    // Sample every 3rd finger
+                    candidate_nodes.push(node.clone());
                 }
             }
         }
-        
+
+        // Remove duplicates and self
+        candidate_nodes.sort_by_key(|n| n.id);
+        candidate_nodes.dedup_by_key(|n| n.id);
+        candidate_nodes
+            .retain(|n| n.id != self.info.id && !replica_nodes.iter().any(|r| r.id == n.id));
+
+        // Sort by load (prefer less loaded nodes)
+        if let Some(node_loads) = self.safe_lock(&self.node_loads) {
+            candidate_nodes.sort_by(|a, b| {
+                let load_a = node_loads.get(&a.id).unwrap_or(&0.0);
+                let load_b = node_loads.get(&b.id).unwrap_or(&0.0);
+                load_a
+                    .partial_cmp(load_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        // Select additional replicas from least loaded candidates
+        for node in candidate_nodes.iter().take(REPLICATION_FACTOR - 1) {
+            replica_nodes.push(node.clone());
+        }
+
         replica_nodes
     }
 
     // Handle incoming replication request
-    async fn handle_replicate_data(&self, key: NodeId, values: Vec<Vec<u8>>, replica_id: u8) -> bool {
+    async fn handle_replicate_data(
+        &self,
+        key: NodeId,
+        values: Vec<Vec<u8>>,
+        replica_id: u8,
+    ) -> bool {
         debug!(
             "[{}] Receiving replica {} for key {}",
-            self.info.address, replica_id, hex::encode(key)
+            self.info.address,
+            replica_id,
+            hex::encode(key)
         );
 
         if let Some(mut data) = self.safe_lock(&self.data) {
@@ -487,25 +566,32 @@ impl<T: NetworkClient> ChordNode<T> {
             log_info!(
                 self.info.address,
                 "Stored replica {} for key: {}",
-                replica_id, hex::encode(key)
+                replica_id,
+                hex::encode(key)
             );
             true
         } else {
             log_error!(
                 self.info.address,
                 "Failed to store replica {} for key: {}",
-                replica_id, hex::encode(key)
+                replica_id,
+                hex::encode(key)
             );
             false
         }
     }
 
     // Handle request for replica data during recovery
-    async fn handle_request_replicas(&self, start: NodeId, end: NodeId) -> Vec<(NodeId, Vec<Vec<u8>>)> {
+    async fn handle_request_replicas(
+        &self,
+        start: NodeId,
+        end: NodeId,
+    ) -> Vec<(NodeId, Vec<Vec<u8>>)> {
         log_info!(
             self.info.address,
             "Providing replicas for range ({}, {}]",
-            hex::encode(start), hex::encode(end)
+            hex::encode(start),
+            hex::encode(end)
         );
 
         if let Some(data) = self.safe_lock(&self.data) {
@@ -517,28 +603,98 @@ impl<T: NetworkClient> ChordNode<T> {
             }
             replicas
         } else {
-            log_error!(self.info.address, "Failed to access data for replica request");
+            log_error!(
+                self.info.address,
+                "Failed to access data for replica request"
+            );
             Vec::new()
         }
     }
 
-    // Retrieves a value by key from the DHT
+    // Retrieves a value by key from the DHT with load-balanced reads
     pub async fn retrieve(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
-        if let Some(mut data) = self.safe_lock(&self.data) {
-            let value = data.remove(&key);
-            if value.is_some() {
-                log_info!(self.info.address, "Retrieved key: {}", hex::encode(key));
-            } else {
-                log_info!(self.info.address, "Key not found: {}", hex::encode(key));
+        // First try local retrieval
+        if let Some(data) = self.safe_lock(&self.data) {
+            if let Some(value) = data.get(&key).cloned() {
+                log_info!(
+                    self.info.address,
+                    "Retrieved key locally: {}",
+                    hex::encode(key)
+                );
+                return Some(value);
             }
-            value
-        } else {
-            log_error!(
-                self.info.address,
-                "Failed to acquire data lock for retrieve operation"
-            );
-            None
         }
+
+        // If not found locally, try load-balanced retrieval from replicas
+        self.retrieve_from_replicas(key).await
+    }
+
+    // Retrieve from replicas using load balancing
+    async fn retrieve_from_replicas(&self, key: NodeId) -> Option<Vec<Vec<u8>>> {
+        let replica_nodes = self.get_replica_nodes(key).await;
+
+        // Sort replicas by load (prefer less loaded nodes for reads)
+        let mut sorted_replicas = replica_nodes;
+        if let Some(node_loads) = self.safe_lock(&self.node_loads) {
+            sorted_replicas.sort_by(|a, b| {
+                let load_a = node_loads.get(&a.id).unwrap_or(&0.0);
+                let load_b = node_loads.get(&b.id).unwrap_or(&0.0);
+                load_a
+                    .partial_cmp(load_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        // Try each replica in order of least load
+        for node in sorted_replicas {
+            if node.id == self.info.id {
+                continue; // Skip self (already tried)
+            }
+
+            match self
+                .network_client
+                .call_node(&node.address, DhtMessage::Retrieve { key })
+                .await
+            {
+                Ok(DhtMessage::Retrieved {
+                    value: Some(value), ..
+                }) => {
+                    log_info!(
+                        self.info.address,
+                        "Retrieved key {} from replica at {}",
+                        hex::encode(key),
+                        node.address
+                    );
+                    return Some(value);
+                }
+                Ok(DhtMessage::Retrieved { value: None, .. }) => {
+                    debug!(
+                        "[{}] Key {} not found at replica {}",
+                        self.info.address,
+                        hex::encode(key),
+                        node.address
+                    );
+                }
+                Err(e) => {
+                    log_error!(
+                        self.info.address,
+                        "Failed to retrieve from replica {}: {}",
+                        node.address,
+                        e
+                    );
+                }
+                _ => {
+                    log_error!(
+                        self.info.address,
+                        "Unexpected response from replica {}",
+                        node.address
+                    );
+                }
+            }
+        }
+
+        log_info!(self.info.address, "Key not found: {}", hex::encode(key));
+        None
     }
 
     // Retrieves all key-value pairs in a given range
@@ -747,6 +903,29 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
             }
         }
+    }
+
+    // Find successor using virtual nodes for better load distribution
+    async fn find_successor_with_virtual_nodes(&self, key: NodeId) -> NodeInfo {
+        // Check if any of our virtual nodes are responsible for this key
+        if let Some(virtual_nodes) = self.safe_lock(&self.virtual_nodes) {
+            // Find the virtual node that should handle this key
+            let mut best_vnode = None;
+            for &vnode_id in virtual_nodes.iter() {
+                if tace_lib::is_between(&key, &self.info.id, &vnode_id) || key == vnode_id {
+                    best_vnode = Some(vnode_id);
+                    break;
+                }
+            }
+
+            // If one of our virtual nodes should handle it, use the physical node
+            if best_vnode.is_some() {
+                return self.info.clone();
+            }
+        }
+
+        // Otherwise, use standard Chord algorithm
+        self.find_successor(key).await
     }
 
     // Finds the predecessor of an ID
@@ -1494,30 +1673,32 @@ impl<T: NetworkClient> ChordNode<T> {
             "Reconciling data after predecessor {} failure",
             failed_predecessor.address
         );
-        
+
         // Calculate the key range we're now responsible for
         let our_pred = if let Some(pred) = self.safe_lock(&self.predecessor) {
             pred.as_ref().map(|p| p.id)
         } else {
             None
         };
-        
+
         let start_range = our_pred.unwrap_or(failed_predecessor.id);
         let end_range = self.info.id;
-        
+
         // Request replicas from other nodes for our new responsibility range
-        let replica_nodes = self.get_replica_nodes_for_range(start_range, end_range).await;
-        
+        let replica_nodes = self
+            .get_replica_nodes_for_range(start_range, end_range)
+            .await;
+
         for node in replica_nodes {
             if node.id == self.info.id {
                 continue; // Skip ourselves
             }
-            
+
             let message = DhtMessage::RequestReplicas {
                 key_range_start: start_range,
                 key_range_end: end_range,
             };
-            
+
             match self.network_client.call_node(&node.address, message).await {
                 Ok(DhtMessage::ReplicaData { replicas }) => {
                     let mut recovered_count = 0;
@@ -1529,18 +1710,20 @@ impl<T: NetworkClient> ChordNode<T> {
                             recovered_count += entry.len() - initial_count;
                         }
                     }
-                    
+
                     log_info!(
                         self.info.address,
                         "Recovered {} data items from replica at {}",
-                        recovered_count, node.address
+                        recovered_count,
+                        node.address
                     );
                 }
                 Err(e) => {
                     log_error!(
                         self.info.address,
                         "Failed to get replicas from {}: {}",
-                        node.address, e
+                        node.address,
+                        e
                     );
                 }
                 _ => {
@@ -1552,7 +1735,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 }
             }
         }
-        
+
         log_info!(
             self.info.address,
             "Completed data reconciliation after predecessor failure"
@@ -1562,26 +1745,27 @@ impl<T: NetworkClient> ChordNode<T> {
     // Get nodes that might have replicas for a given key range
     async fn get_replica_nodes_for_range(&self, start: NodeId, end: NodeId) -> Vec<NodeInfo> {
         let mut nodes = Vec::new();
-        
+
         // Add our successor list - they likely have replicas
         if let Some(successor_list) = self.safe_lock(&self.successor_list) {
             nodes.extend(successor_list.clone());
         }
-        
+
         // Add some nodes from finger table for broader coverage
         if let Some(finger_table) = self.safe_lock(&self.finger_table) {
             for (i, node) in finger_table.iter().enumerate() {
-                if i % 4 == 0 { // Sample every 4th finger for efficiency
+                if i % 4 == 0 {
+                    // Sample every 4th finger for efficiency
                     nodes.push(node.clone());
                 }
             }
         }
-        
+
         // Remove duplicates and ourselves
         nodes.sort_by_key(|n| n.id);
         nodes.dedup_by_key(|n| n.id);
         nodes.retain(|n| n.id != self.info.id);
-        
+
         nodes
     }
 
@@ -1642,6 +1826,154 @@ impl<T: NetworkClient> ChordNode<T> {
                 self.info.address,
                 if ring_valid { "VALID" } else { "INVALID" }
             );
+        }
+    }
+
+    // Load balancing methods
+
+    // Update load metrics for a node
+    pub async fn update_node_load(&self, node_id: NodeId, load: f32) {
+        if let Some(mut node_loads) = self.safe_lock(&self.node_loads) {
+            node_loads.insert(node_id, load);
+        }
+    }
+
+    // Calculate current load for this node
+    pub async fn calculate_current_load(&self) -> f32 {
+        let mut load = 0.0;
+
+        // Factor in data storage load
+        if let Some(data) = self.safe_lock(&self.data) {
+            let data_count = data.len() as f32;
+            load += data_count * 0.001; // Each stored item adds 0.1% load
+        }
+
+        // Factor in connection load
+        let connections = self.active_connections.load(Ordering::Relaxed) as f32;
+        load += connections / MAX_CONNECTIONS as f32;
+
+        // Factor in metrics if available
+        if let Some(metrics) = self.safe_lock(&self.metrics) {
+            load += metrics.cpu_usage_percent / 100.0;
+            load += metrics.memory_usage_percent / 100.0;
+            load += metrics.request_rate_per_second * 0.01; // Each req/sec adds 1% load
+        }
+
+        load.min(1.0) // Cap at 100%
+    }
+
+    // Check if load balancing is needed and trigger rebalancing
+    pub async fn check_and_rebalance(&self) {
+        let current_load = self.calculate_current_load().await;
+
+        // Update our own load in the tracking
+        self.update_node_load(self.info.id, current_load).await;
+
+        // Update metrics with current load
+        if let Some(mut metrics) = self.safe_lock(&self.metrics) {
+            metrics.cpu_usage_percent = current_load * 100.0;
+            metrics.active_connections = self.active_connections.load(Ordering::Relaxed);
+        }
+
+        if current_load > LOAD_BALANCE_THRESHOLD {
+            log_info!(
+                self.info.address,
+                "High load detected ({:.2}%), considering rebalancing",
+                current_load * 100.0
+            );
+            self.rebalance_data().await;
+        }
+    }
+
+    // Migrate data to less loaded nodes
+    async fn rebalance_data(&self) {
+        let keys_to_migrate = if let Some(data) = self.safe_lock(&self.data) {
+            data.keys().take(10).cloned().collect::<Vec<NodeId>>() // Migrate up to 10 keys
+        } else {
+            return;
+        };
+
+        for key in keys_to_migrate {
+            // Find less loaded replicas for this key
+            let replica_nodes = self.get_replica_nodes(key).await;
+
+            let (least_loaded_node, should_migrate) =
+                if let Some(node_loads) = self.safe_lock(&self.node_loads) {
+                    // Find the least loaded replica
+                    let least_loaded = replica_nodes
+                        .iter()
+                        .filter(|n| n.id != self.info.id)
+                        .min_by(|a, b| {
+                            let load_a = node_loads.get(&a.id).unwrap_or(&1.0);
+                            let load_b = node_loads.get(&b.id).unwrap_or(&1.0);
+                            load_a
+                                .partial_cmp(load_b)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+
+                    if let Some(least_loaded) = least_loaded {
+                        let target_load = node_loads.get(&least_loaded.id).unwrap_or(&1.0);
+                        let our_load = node_loads.get(&self.info.id).unwrap_or(&0.0);
+
+                        // Only migrate if target is significantly less loaded
+                        (Some(least_loaded.clone()), *target_load < our_load - 0.2)
+                    } else {
+                        (None, false)
+                    }
+                } else {
+                    (None, false)
+                };
+
+            if should_migrate {
+                if let Some(target_node) = least_loaded_node {
+                    self.migrate_key_to_node(key, target_node).await;
+                }
+            }
+        }
+    }
+
+    // Migrate a specific key to a target node
+    async fn migrate_key_to_node(&self, key: NodeId, target_node: NodeInfo) {
+        // Get the data to migrate
+        let data_to_migrate = if let Some(mut data) = self.safe_lock(&self.data) {
+            data.remove(&key)
+        } else {
+            return;
+        };
+
+        if let Some(values) = data_to_migrate {
+            log_info!(
+                self.info.address,
+                "Migrating key {} to less loaded node {}",
+                hex::encode(key),
+                target_node.address
+            );
+
+            // Send the data to the target node
+            for value in values {
+                let message = DhtMessage::Store {
+                    key,
+                    value: value.clone(),
+                };
+                if let Err(e) = self
+                    .network_client
+                    .call_node(&target_node.address, message)
+                    .await
+                {
+                    log_error!(
+                        self.info.address,
+                        "Failed to migrate key {} to {}: {}",
+                        hex::encode(key),
+                        target_node.address,
+                        e
+                    );
+
+                    // Restore the data locally if migration failed
+                    if let Some(mut data) = self.safe_lock(&self.data) {
+                        data.entry(key).or_default().push(value);
+                    }
+                }
+            }
         }
     }
 }
@@ -1728,6 +2060,10 @@ mod tests {
             predecessor: Arc::new(Mutex::new(None)),
             finger_table: Arc::new(Mutex::new(finger_table_vec)),
             data: Arc::new(Mutex::new(HashMap::new())),
+            virtual_nodes: Arc::new(Mutex::new(
+                ChordNode::<MockNetworkClient>::generate_virtual_nodes("127.0.0.1:8003"),
+            )),
+            node_loads: Arc::new(Mutex::new(HashMap::new())),
             network_client: mock_network_client,
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
@@ -2050,6 +2386,10 @@ mod tests {
             predecessor: Arc::new(Mutex::new(None)),
             finger_table: Arc::new(Mutex::new(vec![node_info.clone(); M])),
             data: Arc::new(Mutex::new(HashMap::new())),
+            virtual_nodes: Arc::new(Mutex::new(
+                ChordNode::<MockNetworkClient>::generate_virtual_nodes("127.0.0.1:9000"),
+            )),
+            node_loads: Arc::new(Mutex::new(HashMap::new())),
             network_client: node.network_client.clone(),
             metrics: Arc::new(Mutex::new(NetworkMetrics::default())),
             shutdown_signal: Arc::new(AtomicBool::new(false)),
@@ -2738,6 +3078,11 @@ mod tests {
             local_key_count: 30,
             total_network_keys_estimate: 30.0,
             network_size_estimate: 20.0,
+            cpu_usage_percent: 0.0,
+            memory_usage_percent: 0.0,
+            disk_usage_percent: 0.0,
+            active_connections: 0,
+            request_rate_per_second: 0.0,
         };
 
         // Handle metrics sharing
@@ -2842,6 +3187,11 @@ mod tests {
             local_key_count: 25,
             total_network_keys_estimate: 25.0,
             network_size_estimate: 15.0,
+            cpu_usage_percent: 0.0,
+            memory_usage_percent: 0.0,
+            disk_usage_percent: 0.0,
+            active_connections: 0,
+            request_rate_per_second: 0.0,
         };
 
         mock_network_client
@@ -2911,6 +3261,11 @@ mod tests {
             local_key_count: 50,
             total_network_keys_estimate: 50.0,
             network_size_estimate: 50.0,
+            cpu_usage_percent: 0.0,
+            memory_usage_percent: 0.0,
+            disk_usage_percent: 0.0,
+            active_connections: 0,
+            request_rate_per_second: 0.0,
         };
 
         mock_network_client
