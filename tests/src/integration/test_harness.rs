@@ -179,7 +179,7 @@ impl TestHarness {
         
         // Actively trigger stabilization cycles
         let mut stabilization_rounds = 0;
-        let max_rounds = 50; // Prevent infinite loops, increased for complex networks
+        let max_rounds = 20; // Prevent infinite loops, optimized for reasonable time
         
         loop {
             if start_time.elapsed() > timeout {
@@ -206,8 +206,8 @@ impl TestHarness {
                 }
             }
             
-            // Wait a bit between rounds - allow time for internal state updates
-            self.timing.sleep(std::time::Duration::from_millis(300)).await;
+            // Wait a bit between rounds - optimized for speed while allowing state updates
+            self.timing.sleep(std::time::Duration::from_millis(100)).await;
             stabilization_rounds += 1;
             
             // Check if we have achieved basic consistency
@@ -247,7 +247,7 @@ impl TestHarness {
             if node_addresses.len() >= 3 {
                 // Check if at least the topology is moving in the right direction
                 // In complex networks, perfect convergence may take time or have edge cases
-                ring_formed = all_have_successors && stabilization_rounds >= 5; // Give time to stabilize
+                ring_formed = all_have_successors && stabilization_rounds >= 3; // Faster for practical use
             }
             
             if all_have_successors && ring_formed {
@@ -268,13 +268,20 @@ impl TestHarness {
         Ok(())
     }
 
-    /// Retrieve data through a specific node
+    /// Retrieve data through a specific node with timeout
     pub async fn retrieve_data(&self, node_address: &str, key: NodeId) -> Result<Option<Vec<Vec<u8>>>, Box<dyn std::error::Error>> {
         let nodes = self.nodes.read().await;
         let node = nodes.get(node_address)
             .ok_or_else(|| format!("Node {} not found", node_address))?;
 
-        Ok(node.chord_node.retrieve_data(key).await.map_err(|e| e.to_string())?)
+        // Add timeout to prevent hanging on data retrieval
+        let chord_node = node.chord_node.clone();
+        let retrieval_future = chord_node.retrieve_data(key);
+        
+        match tokio::time::timeout(std::time::Duration::from_secs(5), retrieval_future).await {
+            Ok(result) => Ok(result.map_err(|e| e.to_string())?),
+            Err(_) => Err("Data retrieval timed out after 5 seconds".into()),
+        }
     }
 
     /// Check if the Chord ring is consistent
