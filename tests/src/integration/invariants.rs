@@ -1,6 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use tace_lib::dht_messages::NodeId;
 use crate::integration::TestHarness;
+use std::collections::{HashMap, HashSet};
 
 /// Network invariants that should always hold in a properly functioning DHT
 /// These represent the core correctness properties of the Chord protocol
@@ -75,7 +74,8 @@ impl NetworkInvariants {
                 violations.push(InvariantViolation {
                     name: "Ring Connectivity".to_string(),
                     description: format!("Not all nodes reachable from {}", start_address),
-                    affected_nodes: node_addresses.iter()
+                    affected_nodes: node_addresses
+                        .iter()
                         .filter(|addr| !visited.contains(*addr))
                         .cloned()
                         .collect(),
@@ -150,14 +150,44 @@ impl NetworkInvariants {
     /// All stored data should be retrievable from the network
     pub async fn check_data_availability(harness: &TestHarness) -> Vec<InvariantViolation> {
         let mut violations = Vec::new();
-        // This would require tracking what data was stored during tests
-        // For now, we'll implement a placeholder
-        
-        // TODO: Implement data tracking and availability checking
-        // This would involve:
-        // 1. Tracking all Store operations during test execution
-        // 2. Attempting to retrieve each stored key from various nodes
-        // 3. Verifying that data is available even after node failures
+        let stored_data = harness.get_stored_data().await;
+        let node_addresses = harness.get_all_node_addresses().await;
+
+        if stored_data.is_empty() || node_addresses.is_empty() {
+            return violations; // Nothing to check
+        }
+
+        // Try to retrieve each stored key from at least one node
+        for (key, expected_value) in &stored_data {
+            let mut found = false;
+            let mut failed_nodes = Vec::new();
+
+            for node_address in &node_addresses {
+                match harness.retrieve_data(node_address, *key).await {
+                    Ok(Some(retrieved_values)) => {
+                        // Check if any of the retrieved values match the expected value
+                        if retrieved_values.iter().any(|v| v == expected_value) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        failed_nodes.push(node_address.clone());
+                    }
+                    Err(_) => {
+                        failed_nodes.push(node_address.clone());
+                    }
+                }
+            }
+
+            if !found {
+                violations.push(InvariantViolation {
+                    name: "Data Availability".to_string(),
+                    description: format!("Key {:?} is not retrievable from any node", key),
+                    affected_nodes: failed_nodes,
+                });
+            }
+        }
 
         violations
     }
@@ -166,13 +196,73 @@ impl NetworkInvariants {
     /// The same key should return the same value from any node
     pub async fn check_data_consistency(harness: &TestHarness) -> Vec<InvariantViolation> {
         let mut violations = Vec::new();
-        // Similar to data availability, this requires test data tracking
-        
-        // TODO: Implement data consistency checking
-        // This would involve:
-        // 1. Retrieving the same key from multiple nodes
-        // 2. Comparing returned values for consistency
-        // 3. Checking replica consistency
+        let stored_data = harness.get_stored_data().await;
+        let node_addresses = harness.get_all_node_addresses().await;
+
+        if stored_data.is_empty() || node_addresses.len() < 2 {
+            return violations; // Nothing to check or only one node
+        }
+
+        // For each stored key, retrieve from multiple nodes and compare
+        for (key, expected_value) in &stored_data {
+            let mut retrieved_values: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+
+            // Collect retrieval results from all nodes
+            for node_address in &node_addresses {
+                match harness.retrieve_data(node_address, *key).await {
+                    Ok(Some(values)) => {
+                        retrieved_values.insert(node_address.clone(), values);
+                    }
+                    Ok(None) => {
+                        // Key not found at this node - this might be normal due to DHT routing
+                    }
+                    Err(_) => {
+                        // Retrieval error - this might be normal if node doesn't have the data
+                    }
+                }
+            }
+
+            // Check consistency among nodes that returned values
+            if retrieved_values.len() > 1 {
+                let mut baseline: Option<&Vec<Vec<u8>>> = None;
+                let mut inconsistent_nodes = Vec::new();
+
+                for (node_address, values) in &retrieved_values {
+                    if let Some(baseline_values) = baseline {
+                        // Compare with baseline
+                        if !values
+                            .iter()
+                            .any(|v| baseline_values.iter().any(|b| b == v))
+                        {
+                            inconsistent_nodes.push(node_address.clone());
+                        }
+                    } else {
+                        baseline = Some(values);
+                    }
+                }
+
+                // Also check that at least one node returns the expected value
+                let has_expected = retrieved_values
+                    .values()
+                    .any(|values| values.iter().any(|v| v == expected_value));
+
+                if !inconsistent_nodes.is_empty() || !has_expected {
+                    violations.push(InvariantViolation {
+                        name: "Data Consistency".to_string(),
+                        description: format!(
+                            "Key {:?} returns inconsistent values across nodes{}",
+                            key,
+                            if !has_expected {
+                                " and doesn't match expected value"
+                            } else {
+                                ""
+                            }
+                        ),
+                        affected_nodes: inconsistent_nodes,
+                    });
+                }
+            }
+        }
 
         violations
     }
@@ -233,7 +323,7 @@ impl NetworkInvariants {
         // Check if any partition exists in the network
         if node_addresses.len() > 1 {
             let reachable_nodes = Self::find_reachable_nodes(harness, &node_addresses[0]).await;
-            
+
             if reachable_nodes.len() != node_addresses.len() {
                 let unreachable: Vec<String> = node_addresses
                     .iter()
@@ -285,7 +375,10 @@ impl NetworkInvariants {
     }
 
     /// Check a specific invariant by name
-    pub async fn check_invariant(harness: &TestHarness, invariant_name: &str) -> Vec<InvariantViolation> {
+    pub async fn check_invariant(
+        harness: &TestHarness,
+        invariant_name: &str,
+    ) -> Vec<InvariantViolation> {
         match invariant_name {
             "ring_connectivity" => Self::check_ring_connectivity(harness).await,
             "successor_consistency" => Self::check_successor_consistency(harness).await,
@@ -306,7 +399,7 @@ impl NetworkInvariants {
     pub fn list_invariants() -> Vec<&'static str> {
         vec![
             "ring_connectivity",
-            "successor_consistency", 
+            "successor_consistency",
             "predecessor_consistency",
             "data_availability",
             "data_consistency",

@@ -797,7 +797,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     address,
                     api_address,
                 };
-                
+
                 // Prevent self-reference: a node should not be its own successor when joining
                 if successor_info.id == self.info.id {
                     log_error!(
@@ -806,7 +806,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     );
                     return;
                 }
-                
+
                 successor_info
             }
             Ok(other) => {

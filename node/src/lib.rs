@@ -1,5 +1,5 @@
 //! Tace DHT Node Library
-//! 
+//!
 //! This library provides the core functionality for DHT (Distributed Hash Table) nodes
 //! implementing the Chord protocol. It can be used both as a standalone binary and
 //! as a library for integration testing.
@@ -47,8 +47,9 @@ impl<T: NetworkClient> ChordNode<T> {
             p2p_address.to_string(),
             api_address.to_string(),
             std::sync::Arc::new(network_client),
-        ).await;
-        
+        )
+        .await;
+
         // Override the generated ID with the provided one
         node.info.id = node_id;
         node
@@ -60,7 +61,8 @@ impl<T: NetworkClient> ChordNode<T> {
             config.p2p_address,
             config.api_address,
             std::sync::Arc::new(RealNetworkClient),
-        ).await;
+        )
+        .await;
 
         if let Some(node_id) = config.node_id {
             // Override generated ID if provided
@@ -73,7 +75,10 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     /// Join an existing network or create a new one
-    pub async fn join_network(&self, bootstrap_address: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn join_network(
+        &self,
+        bootstrap_address: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.join(bootstrap_address.map(|s| s.to_string())).await;
         Ok(())
     }
@@ -85,20 +90,34 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     /// Store data in the DHT
-    pub async fn store_data(&self, key: NodeId, value: Vec<u8>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn store_data(
+        &self,
+        key: NodeId,
+        value: Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.store(key, value).await;
         Ok(())
     }
 
     /// Retrieve data from the DHT
-    pub async fn retrieve_data(&self, key: NodeId) -> Result<Option<Vec<Vec<u8>>>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn retrieve_data(
+        &self,
+        key: NodeId,
+    ) -> Result<Option<Vec<Vec<u8>>>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(self.retrieve(key).await)
     }
 
     /// Find successor of a given ID (wrapper with error handling)
-    pub async fn find_successor_safe(&self, id: NodeId) -> Result<Option<(NodeId, String, String)>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn find_successor_safe(
+        &self,
+        id: NodeId,
+    ) -> Result<Option<(NodeId, String, String)>, Box<dyn std::error::Error + Send + Sync>> {
         let successor = self.find_successor(id).await;
-        Ok(Some((successor.id, successor.address, successor.api_address)))
+        Ok(Some((
+            successor.id,
+            successor.address,
+            successor.api_address,
+        )))
     }
 
     /// Get this node's successor
@@ -114,7 +133,9 @@ impl<T: NetworkClient> ChordNode<T> {
     /// Get this node's predecessor  
     pub async fn get_predecessor(&self) -> Option<(NodeId, String, String)> {
         if let Some(guard) = self.safe_lock_public(&self.predecessor) {
-            guard.as_ref().map(|pred| (pred.id, pred.address.clone(), pred.api_address.clone()))
+            guard
+                .as_ref()
+                .map(|pred| (pred.id, pred.address.clone(), pred.api_address.clone()))
         } else {
             None
         }
@@ -129,12 +150,11 @@ impl<T: NetworkClient> ChordNode<T> {
         }
     }
 
-
     /// Safe lock helper method - expose for testing (calls internal method)
-    pub fn safe_lock_public<'a, U>(&self, mutex: &'a std::sync::Mutex<U>) -> Option<std::sync::MutexGuard<'a, U>> {
-        match mutex.lock() {
-            Ok(guard) => Some(guard),
-            Err(_) => None,
-        }
+    pub fn safe_lock_public<'a, U>(
+        &self,
+        mutex: &'a std::sync::Mutex<U>,
+    ) -> Option<std::sync::MutexGuard<'a, U>> {
+        mutex.lock().ok()
     }
 }

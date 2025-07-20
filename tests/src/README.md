@@ -80,22 +80,22 @@ use integration::{TestHarness, NetworkInvariants};
 #[tokio::test]
 async fn test_basic_network() {
     let mut harness = TestHarness::new();
-    
+
     // Create 3 nodes
     let node1 = harness.add_node([1; 20], 8001, 9001).await?;
     let node2 = harness.add_node([2; 20], 8002, 9002).await?;
     let node3 = harness.add_node([3; 20], 8003, 9003).await?;
-    
+
     harness.start_all_nodes().await?;
-    
+
     // Form network
     harness.connect_node_to_network(&node1, None).await?;
     harness.connect_node_to_network(&node2, Some(&node1)).await?;
     harness.connect_node_to_network(&node3, Some(&node1)).await?;
-    
+
     // Wait for stabilization
     harness.wait_for_stabilization(30).await?;
-    
+
     // Verify network correctness
     let violations = NetworkInvariants::check_all(&harness).await;
     assert!(violations.is_empty());
@@ -109,12 +109,12 @@ async fn test_basic_network() {
 async fn test_data_operations() {
     let mut harness = TestHarness::new();
     // ... setup network ...
-    
+
     // Store data
     let key = [42; 20];
     let value = b"test data".to_vec();
     harness.store_data(&node1, key, value.clone()).await?;
-    
+
     // Retrieve from different node
     let retrieved = harness.retrieve_data(&node2, key).await?;
     assert_eq!(retrieved, Some(vec![value]));
@@ -128,15 +128,15 @@ async fn test_data_operations() {
 async fn test_node_failure() {
     let mut harness = TestHarness::new();
     // ... setup network ...
-    
+
     // Simulate node failure
     harness.fail_node(&node2).await?;
-    
+
     // Verify network adapts
     harness.wait_for_stabilization(30).await?;
     let violations = NetworkInvariants::check_ring_connectivity(&harness).await;
     assert!(violations.is_empty());
-    
+
     // Recover node
     harness.recover_node(&node2).await?;
 }
@@ -148,15 +148,15 @@ async fn test_node_failure() {
 #[tokio::test]
 async fn test_with_timing_control() {
     let mut harness = TestHarness::new();
-    
+
     // Enable manual timing
     harness.timing().enable_manual_mode().await;
-    
+
     // Operations now wait for explicit steps
     let task = tokio::spawn(async move {
         harness.timing().sleep(Duration::from_secs(10)).await;
     });
-    
+
     // Step through manually
     harness.timing().step().await;
     task.await.unwrap(); // Completes immediately
@@ -192,7 +192,7 @@ cargo test test_scalability -- --ignored
 The framework includes several pre-built test scenarios:
 
 1. **Basic Network Formation** - Simple 3-node network setup and verification
-2. **Dynamic Membership** - Nodes joining and leaving dynamically  
+2. **Dynamic Membership** - Nodes joining and leaving dynamically
 3. **Data Operations** - Store/retrieve operations across the network
 4. **Fault Tolerance** - Network resilience to node failures
 5. **Scalability** - Behavior with large numbers of nodes
@@ -323,7 +323,7 @@ When adding new test scenarios:
 ## Future Enhancements
 
 - **Visual Network Monitoring** - Real-time network topology display
-- **Performance Benchmarking** - Automated performance regression testing  
+- **Performance Benchmarking** - Automated performance regression testing
 - **Chaos Engineering** - Random failure injection during operations
 - **Protocol Verification** - Formal verification of protocol properties
 - **Load Testing** - High-throughput data operation testing

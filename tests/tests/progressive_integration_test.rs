@@ -1,16 +1,25 @@
 //! Progressive integration test to understand what's working step by step
 
-use tace_integration_tests::integration::{TestHarness, NetworkInvariants};
 use std::time::Duration;
+use tace_integration_tests::integration::{NetworkInvariants, TestHarness};
 
 #[tokio::test]
 async fn test_step_01_node_creation() {
     let mut harness = TestHarness::new();
 
     // Step 1: Can we create nodes?
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    let node2 = harness.add_node([2; 20], 8002, 9002).await.expect("Failed to add node2");
-    let node3 = harness.add_node([3; 20], 8003, 9003).await.expect("Failed to add node3");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    let node2 = harness
+        .add_node([2; 20], 8002, 9002)
+        .await
+        .expect("Failed to add node2");
+    let node3 = harness
+        .add_node([3; 20], 8003, 9003)
+        .await
+        .expect("Failed to add node3");
 
     println!("✅ Step 1: Node creation works");
     println!("Created nodes: {}, {}, {}", node1, node2, node3);
@@ -20,11 +29,20 @@ async fn test_step_01_node_creation() {
 async fn test_step_02_node_starting() {
     let mut harness = TestHarness::new();
 
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    let node2 = harness.add_node([2; 20], 8002, 9002).await.expect("Failed to add node2");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    let node2 = harness
+        .add_node([2; 20], 8002, 9002)
+        .await
+        .expect("Failed to add node2");
 
     // Step 2: Can we start nodes?
-    harness.start_all_nodes().await.expect("Failed to start nodes");
+    harness
+        .start_all_nodes()
+        .await
+        .expect("Failed to start nodes");
 
     println!("✅ Step 2: Node starting works");
 
@@ -44,8 +62,14 @@ async fn test_step_02_node_starting() {
 async fn test_step_03_single_node_network() {
     let mut harness = TestHarness::new();
 
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    harness.start_all_nodes().await.expect("Failed to start nodes");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    harness
+        .start_all_nodes()
+        .await
+        .expect("Failed to start nodes");
 
     // Step 3: Can we create a single-node network?
     let result = harness.connect_node_to_network(&node1, None).await;
@@ -64,7 +88,10 @@ async fn test_step_03_single_node_network() {
         println!("Successor: {:?}", successor);
         println!("Predecessor: {:?}", predecessor);
     } else {
-        println!("❌ Step 3: Single node network creation failed: {:?}", result);
+        println!(
+            "❌ Step 3: Single node network creation failed: {:?}",
+            result
+        );
     }
 }
 
@@ -72,14 +99,26 @@ async fn test_step_03_single_node_network() {
 async fn test_step_04_join_operation() {
     let mut harness = TestHarness::new();
 
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    let node2 = harness.add_node([2; 20], 8002, 9002).await.expect("Failed to add node2");
-    
-    harness.start_all_nodes().await.expect("Failed to start nodes");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    let node2 = harness
+        .add_node([2; 20], 8002, 9002)
+        .await
+        .expect("Failed to add node2");
+
+    harness
+        .start_all_nodes()
+        .await
+        .expect("Failed to start nodes");
 
     // Create network with first node
-    harness.connect_node_to_network(&node1, None).await.expect("Failed to create network");
-    
+    harness
+        .connect_node_to_network(&node1, None)
+        .await
+        .expect("Failed to create network");
+
     // Wait a moment
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -107,12 +146,27 @@ async fn test_step_04_join_operation() {
 async fn test_step_05_stabilization() {
     let mut harness = TestHarness::new();
 
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    let node2 = harness.add_node([2; 20], 8002, 9002).await.expect("Failed to add node2");
-    
-    harness.start_all_nodes().await.expect("Failed to start nodes");
-    harness.connect_node_to_network(&node1, None).await.expect("Failed to create network");
-    harness.connect_node_to_network(&node2, Some(&node1)).await.expect("Failed to join node2");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    let node2 = harness
+        .add_node([2; 20], 8002, 9002)
+        .await
+        .expect("Failed to add node2");
+
+    harness
+        .start_all_nodes()
+        .await
+        .expect("Failed to start nodes");
+    harness
+        .connect_node_to_network(&node1, None)
+        .await
+        .expect("Failed to create network");
+    harness
+        .connect_node_to_network(&node2, Some(&node1))
+        .await
+        .expect("Failed to join node2");
 
     // Step 5: Does stabilization work?
     let result = harness.wait_for_stabilization(5).await; // Short timeout
@@ -129,7 +183,7 @@ async fn test_step_05_stabilization() {
         println!("Final Node2 successor: {:?}", n2.get_successor().await);
     } else {
         println!("❌ Step 5: Stabilization failed: {:?}", result);
-        
+
         // Still check state to see what we have
         let n1 = harness.get_node(&node1).await.expect("Should get node1");
         let n2 = harness.get_node(&node2).await.expect("Should get node2");
@@ -143,19 +197,34 @@ async fn test_step_05_stabilization() {
 async fn test_step_06_invariant_checking() {
     let mut harness = TestHarness::new();
 
-    let node1 = harness.add_node([1; 20], 8001, 9001).await.expect("Failed to add node1");
-    let node2 = harness.add_node([2; 20], 8002, 9002).await.expect("Failed to add node2");
-    
-    harness.start_all_nodes().await.expect("Failed to start nodes");
-    harness.connect_node_to_network(&node1, None).await.expect("Failed to create network");
-    harness.connect_node_to_network(&node2, Some(&node1)).await.expect("Failed to join node2");
+    let node1 = harness
+        .add_node([1; 20], 8001, 9001)
+        .await
+        .expect("Failed to add node1");
+    let node2 = harness
+        .add_node([2; 20], 8002, 9002)
+        .await
+        .expect("Failed to add node2");
+
+    harness
+        .start_all_nodes()
+        .await
+        .expect("Failed to start nodes");
+    harness
+        .connect_node_to_network(&node1, None)
+        .await
+        .expect("Failed to create network");
+    harness
+        .connect_node_to_network(&node2, Some(&node1))
+        .await
+        .expect("Failed to join node2");
 
     // Wait a bit regardless of formal stabilization
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Step 6: What do the invariants say?
     let violations = NetworkInvariants::check_all(&harness).await;
-    
+
     println!("Invariant violations: {} total", violations.len());
     for violation in &violations {
         println!("  - {}: {}", violation.name, violation.description);
@@ -170,7 +239,7 @@ async fn test_step_06_invariant_checking() {
     // Test specific operations
     let n1 = harness.get_node(&node1).await.expect("Should get node1");
     println!("Node1 can be accessed: ✅");
-    
+
     let successor = n1.get_successor().await;
     if successor.is_some() {
         println!("Node1 has successor: ✅");

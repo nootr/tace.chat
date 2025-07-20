@@ -5,6 +5,7 @@ WORKDIR /app
 # Copy necessary files for building
 COPY Cargo.toml .
 COPY lib lib
+COPY tests tests
 COPY node node
 COPY webclient webclient
 COPY collector collector

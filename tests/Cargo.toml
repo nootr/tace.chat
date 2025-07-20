@@ -11,5 +11,8 @@ tokio = { version = "1", features = ["full"] }
 tace_lib = { path = "../lib" }
 tace_node = { path = "../node" }
 
-[lints]
-workspace = true
+[lints.clippy]
+unwrap_used = "allow"
+expect_used = "allow"
+panic = "allow"
+indexing_slicing = "allow"

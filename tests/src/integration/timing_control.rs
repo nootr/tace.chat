@@ -18,6 +18,12 @@ pub struct TimingController {
     time_multiplier: Arc<Mutex<f64>>,
 }
 
+impl Default for TimingController {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TimingController {
     pub fn new() -> Self {
         Self {
@@ -79,29 +85,35 @@ impl TimingController {
         } else {
             // Apply time multiplier
             let multiplier = *self.time_multiplier.lock().await;
-            let adjusted_duration = Duration::from_nanos((duration.as_nanos() as f64 / multiplier) as u64);
+            let adjusted_duration =
+                Duration::from_nanos((duration.as_nanos() as f64 / multiplier) as u64);
             sleep(adjusted_duration).await;
         }
     }
 
     /// Wait for a condition to become true with timeout
-    pub async fn wait_for_condition<F, Fut>(&self, condition: F, timeout_seconds: u64) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn wait_for_condition<F, Fut>(
+        &self,
+        condition: F,
+        timeout_seconds: u64,
+    ) -> Result<(), Box<dyn std::error::Error>>
     where
         F: Fn() -> Fut,
         Fut: Future<Output = bool>,
     {
         let timeout_duration = Duration::from_secs(timeout_seconds);
-        
+
         let result = timeout(timeout_duration, async {
             loop {
                 if condition().await {
                     return;
                 }
-                
+
                 // Check every 100ms or on manual step
                 self.sleep(Duration::from_millis(100)).await;
             }
-        }).await;
+        })
+        .await;
 
         match result {
             Ok(_) => Ok(()),
@@ -126,7 +138,7 @@ pub struct TimingBarrier {
     parties: usize,
     waiting: Arc<Mutex<usize>>,
     notify: Arc<Notify>,
-    step_notify: Arc<Notify>,
+    _step_notify: Arc<Notify>,
 }
 
 impl TimingBarrier {
@@ -135,7 +147,7 @@ impl TimingBarrier {
             parties,
             waiting: Arc::new(Mutex::new(0)),
             notify: Arc::new(Notify::new()),
-            step_notify,
+            _step_notify: step_notify,
         }
     }
 
@@ -143,7 +155,7 @@ impl TimingBarrier {
     pub async fn wait(&self) {
         let mut waiting = self.waiting.lock().await;
         *waiting += 1;
-        
+
         if *waiting >= self.parties {
             // All parties have arrived, release everyone
             *waiting = 0;
@@ -190,7 +202,7 @@ mod tests {
         controller.enable_manual_mode().await;
 
         let start = std::time::Instant::now();
-        
+
         // Start a task that waits for step
         let controller_clone = controller.clone();
         let task = tokio::spawn(async move {
@@ -228,7 +240,7 @@ mod tests {
         let barrier = controller.barrier(3);
 
         let mut tasks = Vec::new();
-        
+
         for i in 0..3 {
             let barrier_clone = barrier.clone();
             let task = tokio::spawn(async move {

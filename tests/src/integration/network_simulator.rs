@@ -1,10 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
-use tokio::sync::{mpsc, RwLock};
-use tace_lib::dht_messages::{DhtMessage, NodeId};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tace_lib::dht_messages::DhtMessage;
 use tace_node::NetworkClient;
+use tokio::sync::{mpsc, RwLock};
 
 /// Request ID for correlating requests and responses
 pub type RequestId = u64;
@@ -50,6 +50,12 @@ struct DeliveryController {
     drop_rate: f64,
 }
 
+impl Default for NetworkSimulator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NetworkSimulator {
     pub fn new() -> Self {
         Self {
@@ -61,7 +67,11 @@ impl NetworkSimulator {
     }
 
     /// Register a node with the simulator
-    pub async fn register_node(&self, address: String, sender: mpsc::UnboundedSender<SimulatorMessage>) {
+    pub async fn register_node(
+        &self,
+        address: String,
+        sender: mpsc::UnboundedSender<SimulatorMessage>,
+    ) {
         self.nodes.write().await.insert(address, sender);
     }
 
@@ -72,12 +82,20 @@ impl NetworkSimulator {
 
     /// Mark a node as failed (messages will not be delivered)
     pub async fn mark_node_failed(&self, address: &str) {
-        self.delivery_controller.write().await.failed_nodes.insert(address.to_string());
+        self.delivery_controller
+            .write()
+            .await
+            .failed_nodes
+            .insert(address.to_string());
     }
 
     /// Mark a node as recovered
     pub async fn mark_node_recovered(&self, address: &str) {
-        self.delivery_controller.write().await.failed_nodes.remove(address);
+        self.delivery_controller
+            .write()
+            .await
+            .failed_nodes
+            .remove(address);
     }
 
     /// Set simulated network latency
@@ -124,7 +142,7 @@ impl NetworkClient for SimulatedNetworkClient {
         message: DhtMessage,
     ) -> Result<DhtMessage, Box<dyn std::error::Error + Send + Sync>> {
         let controller = self.simulator.delivery_controller.read().await;
-        
+
         // Check if target node is marked as failed
         if controller.failed_nodes.contains(address) {
             return Err("Node is marked as failed".into());
@@ -143,13 +161,17 @@ impl NetworkClient for SimulatedNetworkClient {
 
         // Get the target node's message channel
         let nodes = self.simulator.nodes.read().await;
-        let sender = nodes.get(address)
+        let sender = nodes
+            .get(address)
             .ok_or_else(|| format!("Node {} not registered", address))?
             .clone();
         drop(nodes);
 
         // Generate unique request ID
-        let request_id = self.simulator.next_request_id.fetch_add(1, Ordering::SeqCst);
+        let request_id = self
+            .simulator
+            .next_request_id
+            .fetch_add(1, Ordering::SeqCst);
 
         // Create response channel for this request
         let (response_tx, mut response_rx) = mpsc::unbounded_channel::<DhtMessage>();
@@ -168,7 +190,8 @@ impl NetworkClient for SimulatedNetworkClient {
             response_sender: response_tx,
         };
 
-        sender.send(sim_message)
+        sender
+            .send(sim_message)
             .map_err(|_| "Failed to send message to node")?;
 
         // Wait for response with timeout
@@ -176,15 +199,27 @@ impl NetworkClient for SimulatedNetworkClient {
         match tokio::time::timeout(timeout_duration, response_rx.recv()).await {
             Ok(Some(response)) => {
                 // Clean up the pending request
-                self.simulator.pending_requests.write().await.remove(&request_id);
+                self.simulator
+                    .pending_requests
+                    .write()
+                    .await
+                    .remove(&request_id);
                 Ok(response)
             }
             Ok(None) => {
-                self.simulator.pending_requests.write().await.remove(&request_id);
+                self.simulator
+                    .pending_requests
+                    .write()
+                    .await
+                    .remove(&request_id);
                 Err("Response channel closed".into())
             }
             Err(_) => {
-                self.simulator.pending_requests.write().await.remove(&request_id);
+                self.simulator
+                    .pending_requests
+                    .write()
+                    .await
+                    .remove(&request_id);
                 Err("Request timeout".into())
             }
         }
@@ -193,10 +228,16 @@ impl NetworkClient for SimulatedNetworkClient {
 
 impl SimulatedNetworkClient {
     /// Send a response to a pending request (helper method)
-    pub async fn send_response(&self, request_id: RequestId, response: DhtMessage) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn send_response(
+        &self,
+        request_id: RequestId,
+        response: DhtMessage,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let pending = self.simulator.pending_requests.read().await;
         if let Some(sender) = pending.get(&request_id) {
-            sender.send(response).map_err(|_| "Failed to send response")?;
+            sender
+                .send(response)
+                .map_err(|_| "Failed to send response")?;
             Ok(())
         } else {
             Err("Request ID not found or already completed".into())
