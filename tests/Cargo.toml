@@ -1,0 +1,15 @@
+[package]
+name = "tace_integration_tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+futures = "0.3"
+rand = "0.8"
+tokio = { version = "1", features = ["full"] }
+tace_lib = { path = "../lib" }
+tace_node = { path = "../node" }
+
+[lints]
+workspace = true
