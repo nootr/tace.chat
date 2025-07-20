@@ -172,6 +172,7 @@ export function decrypt(my_private_key_hex, their_public_key_hex, ciphertext, no
 }
 
 /**
+ * --- Signing ---
  * @param {string} private_key_hex
  * @param {Uint8Array} message
  * @returns {Uint8Array}
@@ -197,7 +198,9 @@ export function main_js() {
 const EncryptedMessageFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_encryptedmessage_free(ptr >>> 0, 1));
-
+/**
+ * --- Encryption & Decryption ---
+ */
 export class EncryptedMessage {
 
     static __wrap(ptr) {
@@ -258,7 +261,9 @@ export class EncryptedMessage {
 const JsKeypairFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_jskeypair_free(ptr >>> 0, 1));
-
+/**
+ * --- Key Generation ---
+ */
 export class JsKeypair {
 
     static __wrap(ptr) {

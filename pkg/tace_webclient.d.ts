@@ -3,14 +3,23 @@
 export function generate_keypair(): JsKeypair;
 export function encrypt(my_private_key_hex: string, their_public_key_hex: string, plaintext: string): EncryptedMessage;
 export function decrypt(my_private_key_hex: string, their_public_key_hex: string, ciphertext: Uint8Array, nonce: Uint8Array): string;
+/**
+ * --- Signing ---
+ */
 export function sign(private_key_hex: string, message: Uint8Array): Uint8Array;
 export function main_js(): void;
+/**
+ * --- Encryption & Decryption ---
+ */
 export class EncryptedMessage {
   private constructor();
   free(): void;
   ciphertext: Uint8Array;
   nonce: Uint8Array;
 }
+/**
+ * --- Key Generation ---
+ */
 export class JsKeypair {
   private constructor();
   free(): void;
