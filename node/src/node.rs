@@ -791,11 +791,24 @@ impl<T: NetworkClient> ChordNode<T> {
                 id,
                 address,
                 api_address,
-            }) => NodeInfo {
-                id,
-                address,
-                api_address,
-            },
+            }) => {
+                let successor_info = NodeInfo {
+                    id,
+                    address,
+                    api_address,
+                };
+                
+                // Prevent self-reference: a node should not be its own successor when joining
+                if successor_info.id == self.info.id {
+                    log_error!(
+                        self.info.address,
+                        "Bootstrap node returned self as successor - invalid network state"
+                    );
+                    return;
+                }
+                
+                successor_info
+            }
             Ok(other) => {
                 log_error!(
                     self.info.address,
@@ -1624,6 +1637,15 @@ impl<T: NetworkClient> ChordNode<T> {
             "[{}] Notify: received notify from {}",
             self.info.address, n_prime.address
         );
+
+        // Prevent self-notification - a node should never be its own predecessor
+        if n_prime.id == self.info.id {
+            debug!(
+                "[{}] Notify: ignoring self-notification from {}",
+                self.info.address, n_prime.address
+            );
+            return;
+        }
 
         let should_update;
         let current_pred;
