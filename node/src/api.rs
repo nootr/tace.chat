@@ -210,7 +210,7 @@ async fn get_challenge_handler<B>(req: Request<B>) -> Result<Response<Full<Bytes
     };
     challenges.insert(public_key, challenge);
 
-    info!("Issued challenge for public key");
+    debug!("Issued challenge for public key");
     let response_body = json!({ "nonce": hex::encode(nonce) }).to_string();
     Ok(format_response(StatusCode::OK, response_body))
 }

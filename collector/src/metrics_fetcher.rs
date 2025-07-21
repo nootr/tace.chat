@@ -4,7 +4,7 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use log::{error, info};
+use log::{debug, error, info};
 use rusqlite::Connection;
 use std::sync::Arc;
 use tace_lib::metrics::NetworkMetrics;
@@ -28,7 +28,7 @@ pub async fn fetch_and_store_metrics(
     let client: Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>> =
         Client::builder(TokioExecutor::new()).build(https);
 
-    info!("Fetching metrics from {}", uri);
+    debug!("Fetching metrics from {}", uri);
 
     match client.get(uri).await {
         Ok(res) => {
@@ -42,7 +42,7 @@ pub async fn fetch_and_store_metrics(
                 };
                 match serde_json::from_slice::<NetworkMetrics>(&body_bytes) {
                     Ok(metrics) => {
-                        info!("Successfully fetched metrics: {:?}", metrics);
+                        debug!("Successfully fetched metrics: {:?}", metrics);
                         let conn = db_conn.lock().await;
                         if let Err(e) = db::insert_metrics(&conn, &metrics) {
                             error!("Failed to insert metrics into DB: {}", e);

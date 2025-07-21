@@ -31,6 +31,12 @@ macro_rules! log_info {
     })
 }
 
+macro_rules! log_debug {
+    ($address:expr, $($arg:tt)*) => ({
+        debug!("[{}] {}", $address, format_args!($($arg)*));
+    })
+}
+
 macro_rules! log_error {
     ($address:expr, $($arg:tt)*) => ({
         error!("[{}] {}", $address, format_args!($($arg)*));
@@ -213,7 +219,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub async fn start(&self, bind_address: &str) {
-        log_info!(
+        log_debug!(
             self.info.address,
             "Chord Node {} starting at {} (binding to {})",
             hex::encode(self.info.id),
@@ -237,7 +243,7 @@ impl<T: NetworkClient> ChordNode<T> {
         loop {
             // Check for shutdown signal
             if self.shutdown_signal.load(Ordering::Relaxed) {
-                log_info!(
+                log_debug!(
                     self.info.address,
                     "Shutdown signal received, stopping server"
                 );
@@ -307,7 +313,7 @@ impl<T: NetworkClient> ChordNode<T> {
 
         match bincode::deserialize::<DhtMessage>(&buffer) {
             Ok(message) => {
-                log_info!(self.info.address, "Received message: {:?} ", message);
+                log_debug!(self.info.address, "Received message: {:?} ", message);
 
                 let response = match message {
                     DhtMessage::FindSuccessor { id } => {
@@ -430,7 +436,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     }
                 };
                 if let Some(addr) = peer_addr {
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Sending response to {}: {:?}",
                         addr,
@@ -457,7 +463,7 @@ impl<T: NetworkClient> ChordNode<T> {
         if let Some(mut data) = self.safe_lock(&self.data) {
             let values = data.entry(key).or_default();
             values.push(value.clone());
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "Stored key locally: {}",
                 hex::encode(key)
@@ -598,7 +604,7 @@ impl<T: NetworkClient> ChordNode<T> {
         if let Some(mut data) = self.safe_lock(&self.data) {
             let entry = data.entry(key).or_default();
             entry.extend(values);
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "Stored replica {} for key: {}",
                 replica_id,
@@ -622,7 +628,7 @@ impl<T: NetworkClient> ChordNode<T> {
         start: NodeId,
         end: NodeId,
     ) -> Vec<(NodeId, Vec<Vec<u8>>)> {
-        log_info!(
+        log_debug!(
             self.info.address,
             "Providing replicas for range ({}, {}]",
             hex::encode(start),
@@ -651,7 +657,7 @@ impl<T: NetworkClient> ChordNode<T> {
         // First try local retrieval
         if let Some(data) = self.safe_lock(&self.data) {
             if let Some(value) = data.get(&key).cloned() {
-                log_info!(
+                log_debug!(
                     self.info.address,
                     "Retrieved key locally: {}",
                     hex::encode(key)
@@ -694,7 +700,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 Ok(DhtMessage::Retrieved {
                     value: Some(value), ..
                 }) => {
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Retrieved key {} from replica at {}",
                         hex::encode(key),
@@ -728,7 +734,7 @@ impl<T: NetworkClient> ChordNode<T> {
             }
         }
 
-        log_info!(self.info.address, "Key not found: {}", hex::encode(key));
+        log_debug!(self.info.address, "Key not found: {}", hex::encode(key));
         None
     }
 
@@ -753,7 +759,7 @@ impl<T: NetworkClient> ChordNode<T> {
             }
         }
 
-        log_info!(
+        log_debug!(
             self.info.address,
             "Retrieved {} keys in range ({}, {}]",
             result.len(),
@@ -766,7 +772,7 @@ impl<T: NetworkClient> ChordNode<T> {
 
     pub async fn join(&self, bootstrap_address: Option<String>) {
         let Some(address) = bootstrap_address else {
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "No bootstrap node provided. Starting a new network."
             );
@@ -774,7 +780,7 @@ impl<T: NetworkClient> ChordNode<T> {
             return;
         };
 
-        log_info!(
+        log_debug!(
             self.info.address,
             "Attempting to join network via bootstrap node: {}",
             address
@@ -836,7 +842,7 @@ impl<T: NetworkClient> ChordNode<T> {
             );
             return;
         }
-        log_info!(
+        log_debug!(
             self.info.address,
             "Joined network. Successor: {} at {}",
             hex::encode(successor_info.id),
@@ -844,7 +850,7 @@ impl<T: NetworkClient> ChordNode<T> {
         );
 
         // Request data from successor that should belong to us
-        log_info!(
+        log_debug!(
             self.info.address,
             "Requesting data transfer from successor {}",
             successor_info.address
@@ -864,7 +870,7 @@ impl<T: NetworkClient> ChordNode<T> {
         match data_response {
             Ok(DhtMessage::DataRange { data }) => {
                 if !data.is_empty() {
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Received {} keys from successor",
                         data.len()
@@ -903,7 +909,7 @@ impl<T: NetworkClient> ChordNode<T> {
         });
 
         if success {
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "Started new network. I am the only node."
             );
@@ -958,7 +964,7 @@ impl<T: NetworkClient> ChordNode<T> {
 
                 // Try to use successor list as fallback
                 if let Some(next_available) = self.find_next_available_successor().await {
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Using backup successor {} after failure",
                         next_available.address
@@ -1513,7 +1519,7 @@ impl<T: NetworkClient> ChordNode<T> {
                 if self.safe_update(&self.successor, |successor| {
                     *successor = new_successor.clone();
                 }) {
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Updated successor to {} after failure",
                         new_successor.address
@@ -1709,7 +1715,7 @@ impl<T: NetworkClient> ChordNode<T> {
             let data_to_transfer = self.get_data_range(n_prime.id, self.info.id).await;
 
             if !data_to_transfer.is_empty() {
-                log_info!(
+                log_debug!(
                     self.info.address,
                     "Transferring {} keys to new predecessor {}",
                     data_to_transfer.len(),
@@ -1898,7 +1904,7 @@ impl<T: NetworkClient> ChordNode<T> {
                     }) {
                         log_error!(self.info.address, "Failed to clear dead predecessor");
                     }
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Predecessor {} is unreachable, cleared predecessor",
                         predecessor.address
@@ -1916,7 +1922,7 @@ impl<T: NetworkClient> ChordNode<T> {
 
     /// Handle data reconciliation after predecessor failure
     async fn reconcile_data_after_predecessor_failure(&self, failed_predecessor: NodeInfo) {
-        log_info!(
+        log_debug!(
             self.info.address,
             "Reconciling data after predecessor {} failure",
             failed_predecessor.address
@@ -1959,7 +1965,7 @@ impl<T: NetworkClient> ChordNode<T> {
                         }
                     }
 
-                    log_info!(
+                    log_debug!(
                         self.info.address,
                         "Recovered {} data items from replica at {}",
                         recovered_count,
@@ -1984,7 +1990,7 @@ impl<T: NetworkClient> ChordNode<T> {
             }
         }
 
-        log_info!(
+        log_debug!(
             self.info.address,
             "Completed data reconciliation after predecessor failure"
         );
@@ -2018,7 +2024,7 @@ impl<T: NetworkClient> ChordNode<T> {
     }
 
     pub fn shutdown(&self) {
-        log_info!(self.info.address, "Initiating graceful shutdown");
+        log_debug!(self.info.address, "Initiating graceful shutdown");
         self.shutdown_signal.store(true, Ordering::Relaxed);
 
         // Wait for active connections to finish (with timeout)
@@ -2037,7 +2043,7 @@ impl<T: NetworkClient> ChordNode<T> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
 
-        log_info!(self.info.address, "Shutdown complete");
+        log_debug!(self.info.address, "Shutdown complete");
     }
 
     pub fn debug_ring_state(&self) {
@@ -2130,7 +2136,7 @@ impl<T: NetworkClient> ChordNode<T> {
         }
 
         if current_load > LOAD_BALANCE_THRESHOLD {
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "High load detected ({:.2}%), considering rebalancing",
                 current_load * 100.0
@@ -2196,7 +2202,7 @@ impl<T: NetworkClient> ChordNode<T> {
         };
 
         if let Some(values) = data_to_migrate {
-            log_info!(
+            log_debug!(
                 self.info.address,
                 "Migrating key {} to less loaded node {}",
                 hex::encode(key),
