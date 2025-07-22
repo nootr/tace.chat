@@ -1,4 +1,5 @@
-//! Working integration tests that verify the framework step by step
+//! Comprehensive integration tests
+//! Full end-to-end integration tests including data operations, network formation, and invariants
 
 use tace_integration_tests::integration::{NetworkInvariants, TestHarness};
 
@@ -56,7 +57,7 @@ async fn test_network_simulator_basic_operations() {
 
     // Start a background task to handle received messages
     tokio::spawn(async move {
-        while let Some(sim_message) = rx.recv().await {
+        if let Some(sim_message) = rx.recv().await {
             match sim_message {
                 tace_integration_tests::integration::SimulatorMessage::Request {
                     from,
@@ -76,9 +77,8 @@ async fn test_network_simulator_basic_operations() {
                             });
                         }
                     }
-                    break; // Exit after first message for test
                 }
-                _ => break,
+                _ => {}
             }
         }
     });
@@ -210,7 +210,7 @@ async fn test_full_integration() {
 
     let mut harness = TestHarness::new();
 
-    // Create nodes
+    // Create 3 nodes for better network stability
     let _node1 = harness
         .add_node([1; 20], 8001, 9001)
         .await
@@ -219,6 +219,10 @@ async fn test_full_integration() {
         .add_node([2; 20], 8002, 9002)
         .await
         .expect("Failed to add node2");
+    let _node3 = harness
+        .add_node([3; 20], 8003, 9003)
+        .await
+        .expect("Failed to add node3");
 
     // Start nodes (this creates the ChordNode instances but doesn't start network processing)
     harness
@@ -236,6 +240,11 @@ async fn test_full_integration() {
         .connect_node_to_network(&_node2, Some(&_node1))
         .await
         .expect("Failed to connect node2 to network");
+
+    harness
+        .connect_node_to_network(&_node3, Some(&_node1))
+        .await
+        .expect("Failed to connect node3 to network");
 
     // Wait for network stabilization
     harness

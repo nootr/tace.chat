@@ -1,4 +1,5 @@
-//! Simple data operations test for debugging
+//! DHT data operations tests
+//! Tests data storage, retrieval, and replication operations in the distributed hash table
 
 use tace_integration_tests::integration::{NetworkInvariants, TestHarness};
 

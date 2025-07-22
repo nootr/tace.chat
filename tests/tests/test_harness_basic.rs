@@ -1,4 +1,5 @@
-//! Simple integration test to verify the framework works
+//! Basic test harness functionality tests
+//! Verifies core test harness components like node creation, network simulation, etc.
 use tace_integration_tests::integration::TestHarness;
 use tace_node::NetworkClient;
 
@@ -50,27 +51,25 @@ async fn test_network_simulator() {
     let client = simulator.create_client("127.0.0.1:8000".to_string());
     tokio::spawn(async move {
         if let Some(sim_message) = rx.recv().await {
-            match sim_message {
-                tace_integration_tests::integration::SimulatorMessage::Request {
-                    from,
-                    message,
-                    request_id: _,
-                    response_sender,
-                } => {
-                    println!("Received message from {}: {:?}", from, message);
-                    // Echo back a pong for ping
-                    match message {
-                        DhtMessage::Ping => {
-                            let _ = response_sender.send(DhtMessage::Pong);
-                        }
-                        _ => {
-                            let _ = response_sender.send(DhtMessage::Error {
-                                message: "Unknown message".to_string(),
-                            });
-                        }
+            if let tace_integration_tests::integration::SimulatorMessage::Request {
+                from,
+                message,
+                request_id: _,
+                response_sender,
+            } = sim_message
+            {
+                println!("Received message from {}: {:?}", from, message);
+                // Echo back a pong for ping
+                match message {
+                    DhtMessage::Ping => {
+                        let _ = response_sender.send(DhtMessage::Pong);
+                    }
+                    _ => {
+                        let _ = response_sender.send(DhtMessage::Error {
+                            message: "Unknown message".to_string(),
+                        });
                     }
                 }
-                _ => {}
             }
         }
     });

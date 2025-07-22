@@ -1,4 +1,5 @@
-//! Progressive integration test to understand what's working step by step
+//! Step-by-step integration tests
+//! Progressive integration tests that validate each framework component incrementally
 
 use std::time::Duration;
 use tace_integration_tests::integration::{NetworkInvariants, TestHarness};

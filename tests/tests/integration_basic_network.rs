@@ -1,4 +1,5 @@
-//! Test the fixed integration between ChordNode and SimulatedNetworkClient
+//! Basic network formation integration tests
+//! Tests single-node and multi-node network creation, message routing, and basic invariants
 
 use std::time::Duration;
 use tace_integration_tests::integration::{NetworkInvariants, TestHarness};
@@ -105,26 +106,24 @@ async fn test_direct_message_routing() {
     // Start a task to handle messages
     let response_task = tokio::spawn(async move {
         if let Some(sim_message) = rx.recv().await {
-            match sim_message {
-                tace_integration_tests::integration::SimulatorMessage::Request {
-                    from: _,
-                    message,
-                    request_id: _,
-                    response_sender,
-                } => {
-                    // Echo back a pong for ping
-                    match message {
-                        DhtMessage::Ping => {
-                            let _ = response_sender.send(DhtMessage::Pong);
-                        }
-                        _ => {
-                            let _ = response_sender.send(DhtMessage::Error {
-                                message: "Unknown message".to_string(),
-                            });
-                        }
+            if let tace_integration_tests::integration::SimulatorMessage::Request {
+                from: _,
+                message,
+                request_id: _,
+                response_sender,
+            } = sim_message
+            {
+                // Echo back a pong for ping
+                match message {
+                    DhtMessage::Ping => {
+                        let _ = response_sender.send(DhtMessage::Pong);
+                    }
+                    _ => {
+                        let _ = response_sender.send(DhtMessage::Error {
+                            message: "Unknown message".to_string(),
+                        });
                     }
                 }
-                _ => {}
             }
         }
     });
@@ -159,7 +158,6 @@ async fn test_basic_invariants() {
 }
 
 #[tokio::test]
-#[ignore] // This test will show what we've achieved so far
 async fn test_integration_milestone() {
     let mut harness = TestHarness::new();
 

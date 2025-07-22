@@ -41,16 +41,23 @@ impl ConnectionLimiter {
 
     fn can_connect(&mut self, address: &str) -> bool {
         let now = Instant::now();
-        
+
         // Cleanup old entries periodically
-        if self.stats.values().any(|s| now.duration_since(s.last_cleanup) > self.cleanup_interval) {
+        if self
+            .stats
+            .values()
+            .any(|s| now.duration_since(s.last_cleanup) > self.cleanup_interval)
+        {
             self.cleanup_old_entries(now);
         }
 
-        let stats = self.stats.entry(address.to_string()).or_insert(ConnectionStats {
-            active_count: 0,
-            last_cleanup: now,
-        });
+        let stats = self
+            .stats
+            .entry(address.to_string())
+            .or_insert(ConnectionStats {
+                active_count: 0,
+                last_cleanup: now,
+            });
 
         stats.active_count < self.max_connections_per_host
     }
@@ -69,7 +76,8 @@ impl ConnectionLimiter {
 
     fn cleanup_old_entries(&mut self, now: Instant) {
         self.stats.retain(|_, stats| {
-            stats.active_count > 0 || now.duration_since(stats.last_cleanup) < self.cleanup_interval * 2
+            stats.active_count > 0
+                || now.duration_since(stats.last_cleanup) < self.cleanup_interval * 2
         });
     }
 }
@@ -99,6 +107,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_RETRIES: u32 = 3;
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_CONNECTIONS_PER_HOST: usize = 5;
+
+impl Default for RealNetworkClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RealNetworkClient {
     pub fn new() -> Self {
@@ -151,7 +165,10 @@ impl RealNetworkClient {
         {
             let mut limiter = self.limiter.lock().await;
             if !limiter.can_connect(address) {
-                warn!("Connection limit reached for {}, rejecting request", address);
+                warn!(
+                    "Connection limit reached for {}, rejecting request",
+                    address
+                );
                 return Err(format!("Connection limit exceeded for {}", address).into());
             }
             limiter.increment_count(address);
@@ -229,7 +246,7 @@ impl RealNetworkClient {
 
         // Keep the guard alive until the end of the function
         drop(connection_guard);
-        
+
         Ok(response)
     }
 }
