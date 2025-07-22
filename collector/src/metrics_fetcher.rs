@@ -4,7 +4,7 @@ use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
-use log::{debug, error, info};
+use log::{debug, error};
 use rusqlite::Connection;
 use std::sync::Arc;
 use tace_lib::metrics::NetworkMetrics;

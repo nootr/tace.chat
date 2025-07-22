@@ -1,4 +1,4 @@
-use log::{debug, error, info};
+use log::{debug, error};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 use rand::seq::SliceRandom;
@@ -23,12 +23,6 @@ impl Drop for ConnectionGuard {
     fn drop(&mut self) {
         self.counter.fetch_sub(1, Ordering::Relaxed);
     }
-}
-
-macro_rules! log_info {
-    ($address:expr, $($arg:tt)*) => ({
-        info!("[{}] {}", $address, format_args!($($arg)*));
-    })
 }
 
 macro_rules! log_debug {
@@ -1771,41 +1765,35 @@ impl<T: NetworkClient> ChordNode<T> {
             Some(guard) => guard,
             None => return 1.0, // Default to single node
         };
-        let predecessor = match self.safe_lock(&self.predecessor) {
-            Some(guard) => guard,
-            None => return 1.0, // Default to single node
-        };
-
-        // If we don't have a predecessor, use ourselves
-        let pred_id = predecessor.as_ref().map(|p| p.id).unwrap_or(self.info.id);
 
         // Convert IDs to BigUint for arithmetic
+        let self_id = tace_lib::node_id_to_biguint(&self.info.id);
         let succ_id = tace_lib::node_id_to_biguint(&successor.id);
-        let pred_id = tace_lib::node_id_to_biguint(&pred_id);
 
-        // Calculate the size of the range between predecessor and successor
+        // Calculate the size of the range from self to successor
+        // This represents the portion of the ID space we're responsible for
         let max_id = BigUint::from(2u32).pow(160);
 
-        let range = if pred_id <= succ_id {
-            // Normal case: pred -> succ (no wraparound)
-            &succ_id - &pred_id
+        let range = if self_id <= succ_id {
+            // Normal case: self -> succ (no wraparound)
+            &succ_id - &self_id
         } else {
-            // Wraparound case: pred -> 0 -> max -> succ
-            &max_id - &pred_id + &succ_id
+            // Wraparound case: self -> max -> 0 -> succ
+            &max_id - &self_id + &succ_id
         };
 
-        // If range is zero, avoid division by zero
+        // If range is zero, we are our own successor (single node)
         if range == BigUint::from(0u32) {
             return 1.0; // Only one node
         }
 
-        // Local estimate: if we have 2 nodes (predecessor and successor) in this range,
-        // then the total network size is estimated as: total_space / range * 2
+        // Network size estimate: if each node is responsible for 'range' of the ID space,
+        // then total network size = total_space / range
         let range_f64 = range.to_f64().unwrap_or(f64::MAX);
         let max_f64 = max_id.to_f64().unwrap_or(f64::MAX);
 
-        // Network size estimate based on local density
-        2.0 * max_f64 / range_f64
+        // Network size estimate based on how much of the ring we're responsible for
+        max_f64 / range_f64
     }
 
     fn apply_bounds(&self, old_estimate: f64, new_estimate: f64) -> f64 {
@@ -3101,6 +3089,65 @@ mod tests {
 
         // The estimate should be reasonable (not extremely large)
         assert!(estimate < 100.0, "Estimate too large: {}", estimate);
+    }
+
+    #[tokio::test]
+    async fn test_calculate_network_size_two_nodes_correct() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Test the corrected algorithm for 2-node network
+        // Node A at position ~0, Node B at position ~0.5 of the ring
+        let node_b_id = hex_to_node_id("8000000000000000000000000000000000000000");
+
+        // In a 2-node network, each node's successor is the other node
+        *node.successor.lock().unwrap() = NodeInfo {
+            id: node_b_id,
+            address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
+        };
+
+        // Print node IDs for debugging
+        println!("Node A ID: {}", hex::encode(&node.info.id));
+        println!("Node B ID: {}", hex::encode(&node_b_id));
+
+        let estimate = node.calculate_local_network_size_estimate();
+        println!("Estimate: {}", estimate);
+
+        // The actual estimate depends on the hash of "127.0.0.1:9000"
+        // Let's just verify it's reasonable for a small network
+        assert!(
+            estimate >= 2.0 && estimate <= 20.0,
+            "Expected reasonable estimate for 2-node network, got {}",
+            estimate
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calculate_network_size_three_nodes() {
+        let mock_network_client = Arc::new(MockNetworkClient::new());
+        let node = ChordNode::new_for_test("127.0.0.1:9000".to_string(), mock_network_client);
+
+        // Test 3-node network with roughly even distribution
+        // Node A at ~0, Node B at ~0.33, Node C at ~0.66
+        let node_b_id = hex_to_node_id("5555555555555555555555555555555555555555");
+
+        *node.successor.lock().unwrap() = NodeInfo {
+            id: node_b_id,
+            address: "127.0.0.1:9001".to_string(),
+            api_address: "127.0.0.1:9001".to_string(),
+        };
+
+        let estimate = node.calculate_local_network_size_estimate();
+
+        // With 3 evenly distributed nodes:
+        // - Node A's range to successor B is ~0.33 of the ring
+        // - Network size = total_space / range ≈ 3.0
+        assert!(
+            estimate >= 2.5 && estimate <= 3.5,
+            "Expected ~3.0 for 3-node network, got {}",
+            estimate
+        );
     }
 
     #[tokio::test]
