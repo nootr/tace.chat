@@ -60,7 +60,7 @@ impl<T: NetworkClient> ChordNode<T> {
         let node = ChordNode::new(
             config.p2p_address,
             config.api_address,
-            std::sync::Arc::new(RealNetworkClient),
+            std::sync::Arc::new(RealNetworkClient::new()),
         )
         .await;
 

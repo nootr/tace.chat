@@ -85,7 +85,7 @@ async fn main() {
         ChordNode::new(
             advertise_p2p_address,
             advertise_api_address,
-            Arc::new(RealNetworkClient),
+            Arc::new(RealNetworkClient::new()),
         )
         .await,
     );
